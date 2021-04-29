@@ -9,6 +9,7 @@ use std::clone::Clone;
 use std::str::FromStr;
 use std::slice::Iter;
 use crate::models::application::modes::{SearchSelectMode, SearchSelectConfig};
+use crate::models::application::modes::mode::*;
 
 pub struct SymbolJumpMode {
     insert: bool,
@@ -16,6 +17,16 @@ pub struct SymbolJumpMode {
     symbols: Vec<Symbol>,
     results: SelectableVec<Symbol>,
     config: SearchSelectConfig,
+}
+
+impl MMode for SymbolJumpMode {
+    fn get_mode_id(&self) -> ModeID {
+        if self.insert{
+            return ModeID{id:Some("search_select_insret")};
+        } else {
+            return ModeID{id:Some("search_select")};
+        }
+    }
 }
 
 #[derive(PartialEq, Debug)]

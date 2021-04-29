@@ -8,6 +8,7 @@ use std::slice::Iter;
 use crate::models::application::modes::{SearchSelectMode, SearchSelectConfig};
 use crate::commands::{self, Command};
 pub use self::displayable_command::DisplayableCommand;
+use crate::models::application::modes::mode::*;
 
 pub struct CommandMode {
     insert: bool,
@@ -15,6 +16,16 @@ pub struct CommandMode {
     commands: HashMap<&'static str, Command>,
     results: SelectableVec<DisplayableCommand>,
     config: SearchSelectConfig,
+}
+
+impl MMode for CommandMode{
+    fn get_mode_id(&self) -> ModeID {
+        if self.insert{
+            return ModeID{id:Some("search_select_insret")};
+        } else {
+            return ModeID{id:Some("search_select")};
+        }
+    }
 }
 
 impl CommandMode {

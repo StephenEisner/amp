@@ -3,6 +3,7 @@ use crate::util::SelectableVec;
 use std::fmt;
 use std::slice::Iter;
 use crate::models::application::modes::{SearchSelectMode, SearchSelectConfig};
+use crate::models::application::modes::mode::*;
 
 pub struct ThemeMode {
     insert: bool,
@@ -12,6 +13,15 @@ pub struct ThemeMode {
     config: SearchSelectConfig,
 }
 
+impl MMode for ThemeMode {
+    fn get_mode_id(&self) -> ModeID {
+        if self.insert{
+            return ModeID{id:Some("search_select_insret")};
+        } else {
+            return ModeID{id:Some("search_select")};
+        }
+    }
+}
 impl ThemeMode {
     pub fn new(themes: Vec<String>, config: SearchSelectConfig) -> ThemeMode {
         ThemeMode {

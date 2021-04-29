@@ -1,9 +1,9 @@
 [package]
 
-name = "amp"
-version = "0.6.2"
-authors = ["Jordan MacDonald <jordan@wastedintelligence.com>"]
-description = "A complete text editor for your terminal."
+name = "volt"
+version = "0.0.1"
+authors = ["Stephen eisner"]
+description = "A fork of amp with features"
 homepage = "https://amp.rs"
 repository = "https://github.com/jmacdonald/amp"
 documentation = "https://amp.rs/docs"

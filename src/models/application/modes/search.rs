@@ -2,11 +2,22 @@ use crate::errors::*;
 use crate::util::SelectableVec;
 use std::fmt;
 use scribe::buffer::{Buffer, Distance, Range};
+use crate::models::application::modes::mode::*;
 
 pub struct SearchMode {
     pub insert: bool,
     pub input: Option<String>,
     pub results: Option<SelectableVec<Range>>,
+}
+
+impl MMode for SearchMode {
+    fn get_mode_id(&self) -> ModeID {
+        if self.insert {
+            return ModeID{id:Some("search_insert")};
+        } else {
+            return ModeID{id:Some("search")};
+        }
+    }
 }
 
 impl SearchMode {

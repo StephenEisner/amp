@@ -12,6 +12,7 @@ use std::sync::mpsc::Sender;
 use std::thread;
 pub use bloodhound::Index;
 pub use self::displayable_path::DisplayablePath;
+use crate::models::application::modes::mode::*;
 
 #[derive(PartialEq)]
 pub enum OpenModeIndex {
@@ -25,6 +26,16 @@ pub struct OpenMode {
     index: OpenModeIndex,
     pub results: SelectableVec<DisplayablePath>,
     config: SearchSelectConfig,
+}
+
+impl MMode for OpenMode {
+    fn get_mode_id(&self) -> ModeID {
+        if self.insert{
+            return ModeID{id:Some("search_select_insret")};
+        } else {
+            return ModeID{id:Some("search_select")};
+        }
+    }
 }
 
 impl OpenMode {

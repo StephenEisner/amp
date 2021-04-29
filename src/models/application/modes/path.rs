@@ -1,4 +1,5 @@
 use std::fmt;
+use crate::models::application::modes::mode::*;
 
 pub struct PathMode {
     pub input: String,
@@ -23,5 +24,11 @@ impl PathMode {
 impl fmt::Display for PathMode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "PATH")
+    }
+}
+
+impl MMode for PathMode {
+    fn get_mode_id(&self) -> ModeID {
+        return ModeID{id:Some("path")};
     }
 }

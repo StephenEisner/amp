@@ -3,6 +3,7 @@ use crate::util::SelectableVec;
 use std::fmt;
 use std::slice::Iter;
 use crate::models::application::modes::{SearchSelectMode, SearchSelectConfig};
+use crate::models::application::modes::mode::*;
 
 pub struct SyntaxMode {
     insert: bool,
@@ -10,6 +11,16 @@ pub struct SyntaxMode {
     syntaxes: Vec<String>,
     results: SelectableVec<String>,
     config: SearchSelectConfig,
+}
+
+impl MMode for SyntaxMode {
+    fn get_mode_id(&self) -> ModeID {
+        if self.insert{
+            return ModeID{id:Some("search_select_insret")};
+        } else {
+            return ModeID{id:Some("search_select")};
+        }
+    }
 }
 
 impl SyntaxMode {

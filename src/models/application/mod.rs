@@ -22,6 +22,7 @@ use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use crate::view::View;
 
+
 pub enum Mode {
     Confirm(ConfirmMode),
     Command(CommandMode),
@@ -41,6 +42,7 @@ pub enum Mode {
 }
 
 pub struct Application {
+    pub mmode: ModeID,
     pub mode: Mode,
     pub workspace: Workspace,
     pub search_query: Option<String>,
@@ -65,6 +67,7 @@ impl Application {
         let workspace = create_workspace(&mut view, &preferences.borrow(), args)?;
 
         Ok(Application {
+            mmode: ModeID{id:Some("normal")},
             mode: Mode::Normal,
             workspace,
             search_query: None,
@@ -173,6 +176,10 @@ impl Application {
         Ok(())
     }
 
+    pub fn mmode_str(&self) -> Option<&'static str> {
+        self.mmode.get_id()
+    }
+
     pub fn mode_str(&self) -> Option<&'static str> {
         match self.mode {
             Mode::Command(ref mode) => if mode.insert_mode() {
@@ -216,6 +223,7 @@ impl Application {
             Mode::Exit => None,
         }
     }
+
 }
 
 fn initialize_preferences() -> Rc<RefCell<Preferences>> {
