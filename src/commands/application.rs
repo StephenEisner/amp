@@ -28,6 +28,7 @@ pub fn handle_input(app: &mut Application) -> Result {
 pub fn switch_to_normal_mode(app: &mut Application) -> Result {
     let _ = commands::buffer::end_command_group(app);
     app.mode = Mode::Normal;
+    app.mmode = NormalMode::new().get_mode_id();
 
     Ok(())
 }

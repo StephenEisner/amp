@@ -1,0 +1,16 @@
+main -> creates instance of Application and then runs it
+    application -> .mode_identifier
+        -> mode_str() -> Option<&'static str>
+        -> run()
+          -> wait_for_event()
+            -> handle_input(application) (src/commands/application.rs)
+            |  -> app.preferences.borrow().keymap() 
+            |    ->commands_for(keymap, app.mode_str(), app.view.last_key()) (input/key_map/mod.rs)
+            |     keymap.get(app.mode_str)
+            |       ->returns vector of commands from map entry 
+            |  executes cmomands from returned vector
+    
+TODO
+potentially shrink the size of the smallvec because no keymap bind to more than 1 command at the moment
+
+refactor the modes so that new modes can be added in single files

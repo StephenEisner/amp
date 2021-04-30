@@ -67,6 +67,7 @@ impl Application {
         let workspace = create_workspace(&mut view, &preferences.borrow(), args)?;
 
         Ok(Application {
+            mode_obj: NormalMode::new(),
             mmode: ModeID{id:Some("normal")},
             mode: Mode::Normal,
             workspace,
@@ -174,6 +175,10 @@ impl Application {
         }
 
         Ok(())
+    }
+
+    pub fn mode_str_obj(&self) -> Option<&'static str> {
+        self.mode_obj.get_id()
     }
 
     pub fn mmode_str(&self) -> Option<&'static str> {
