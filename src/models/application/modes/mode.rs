@@ -1,11 +1,14 @@
 //@author = StephenEisner
+use crate::models::application::Application;
 
-pub trait MMode {
-     fn get_mode_id(&self) -> ModeID;
+pub trait Mode {
+     fn get_mode_id() -> ModeID;
+     fn present_func(app: &mut Application) -> Result<()>;
 }
 
 pub struct ModeID {
     pub id: Option<&'static str>,
+    pub present: fn(&mut Application) -> Result<()>,
 }
 
 impl ModeID {

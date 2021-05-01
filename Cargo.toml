@@ -3,9 +3,9 @@
 name = "volt"
 version = "0.0.1"
 authors = ["Stephen eisner"]
-description = "A fork of amp with features"
+description = "A fork of amp with my features"
 homepage = "https://amp.rs"
-repository = "https://github.com/jmacdonald/amp"
+repository = "https://github.com/StephenEisner/volt"
 documentation = "https://amp.rs/docs"
 readme = "README.md"
 license-file = "LICENSE"

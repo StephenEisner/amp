@@ -9,8 +9,101 @@ main -> creates instance of Application and then runs it
             |     keymap.get(app.mode_str)
             |       ->returns vector of commands from map entry 
             |  executes cmomands from returned vector
+-->
     
-TODO
+fix:
 potentially shrink the size of the smallvec because no keymap bind to more than 1 command at the moment
 
 refactor the modes so that new modes can be added in single files
+
+note:MODES DON'T HAVE A STATE. 
+THERE MIGHT BE GLOBAL VARIABLES BUT MODES CANT HAVE STATE CUZ WHY WOULD THEY
+when you switch to drive the variables of the car are already existing and now just being used. But a new instance of drive is not created
+
+
+/-> application::switch_to_search_mode
+        -> app.mode=Search(SearchMode::new(app.search_query.clone())
+
+    search::clear_query
+        -> clears search buffers (app.search_query) and mode.input
+    
+    c -> search::push_search_char(c)
+         if app.mode is Search
+         -> query = mode.input(get_query)
+        
+
+fix: make app.search_query not specific and just some string buffer and passed to the search execution function 
+
+
+
+note:Think about stack of modes, and potentially stack of string buffers for input and the like
+
+
+note:mode structs are meant for settings variables i.e. timeout, name, display stuff?, and probably more. 
+    Maybe they all will have a settings hashmap so that they can have different settings where you search for the values through keys
+        (i.e.) map('timeout') would be set to 800ms. This way you don't need to define timeout for every mode and can make up defaults
+
+
+
+Things needed before first official private build
+        check out SelectMode, SearchSelectConfig, SearchMode, OpenMode
+        integrate Path and Confirm mode (needed for writing files)
+        investigate if OpenMode is required for opening files (probably) (look at amp/src)
+        make sure Application names are correct
+        make sure normal mode and insert mode usage is correct (NormalMode::get_mode_id() instead of NormalMode::new() or Mode::Normal)
+
+
+old modes  
+    confirm;
+    command;
+    mod jump;
+    line_jump;
+    mod open;
+    path;
+    search;
+    search_select;
+    select;
+    select_line;
+    symbol_jump;
+    syntax;
+    theme;
+
+
+
+MY MODES:window
+ tab
+ fold
+ buffer
+ explore
+ comment
+ format(could be joined with comment, allows for shifting to the left and right and stuff)
+ syntax(not sure what this means lmao)
+ rust?(language specific mode)
+ change/replace
+ scroll
+ macro mode(like q_ in vim)
+ copy/paste
+ undo/redo
+ project or org mode
+
+mode controlling, <space>(mode_key) makes it so that there is no timer  
+
+required features before sharing this
+        rebuild the original modes
+        some of the modes I have wanted to add
+        tabs
+        windows
+        mode stack
+        multikey commands. might be already available unsure
+            potentially does not matter however because modes might be enough if they are fast enough
+
+
+advanced features
+        in editor terminal
+        potentially be able to get vim plugins in this(really probably not possible)
+        rebuild popular vim plugins for this editor
+        infinite tab, meaning you can go left and right forever and mark sections
+        join tabs and split tabs
+        
+necessary for actual configuration
+        creating rules for filetypes and actions for entering a filetype or buffer or window or tab
