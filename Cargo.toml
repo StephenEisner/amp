@@ -1,11 +1,11 @@
 [package]
 
-name = "volt"
-version = "0.0.1"
-authors = ["Stephen eisner"]
-description = "A fork of amp with my features"
+name = "amp"
+version = "0.6.2"
+authors = ["Jordan MacDonald <jordan@wastedintelligence.com>"]
+description = "A complete text editor for your terminal."
 homepage = "https://amp.rs"
-repository = "https://github.com/StephenEisner/volt"
+repository = "https://github.com/jmacdonald/amp"
 documentation = "https://amp.rs/docs"
 readme = "README.md"
 license-file = "LICENSE"

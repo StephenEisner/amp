@@ -2,11 +2,13 @@ use app_dirs::{app_dir, app_root, get_app_root, AppDataType, AppInfo};
 use bloodhound::ExclusionPattern;
 use crate::errors::*;
 use crate::input::KeyMap;
+use crate::models::application::modes::open;
 use scribe::Buffer;
 use std::fs::OpenOptions;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use crate::yaml::yaml::{Hash, Yaml, YamlLoader};
+use crate::models::application::modes::SearchSelectConfig;
 
 const APP_INFO: AppInfo = AppInfo {
     name: "amp",
@@ -163,6 +165,16 @@ impl Preferences {
             })
     }
 
+    pub fn search_select_config(&self) -> SearchSelectConfig {
+        let mut result = SearchSelectConfig::default();
+        if let Some(ref data) = self.data {
+            if let Yaml::Integer(max_results) = data[SEARCH_SELECT_KEY]["max_results"] {
+                result.max_results = max_results as usize;
+            }
+        }
+        result
+    }
+
     pub fn soft_tabs(&self, path: Option<&PathBuf>) -> bool {
         self.data
             .as_ref()
@@ -227,6 +239,26 @@ impl Preferences {
         }
     }
 
+    pub fn open_mode_exclusions(&self) -> Result<Option<Vec<ExclusionPattern>>> {
+        let exclusion_data = self.data
+            .as_ref()
+            .map(|data| &data[OPEN_MODE_KEY][OPEN_MODE_EXCLUSIONS_KEY]);
+
+        if let Some(exclusion_data) = exclusion_data {
+            match *exclusion_data {
+                Yaml::Array(ref exclusions) => {
+                    open::exclusions::parse(exclusions)
+                        .chain_err(|| "Failed to parse user-defined open mode exclusions")
+                        .map(Some)
+                },
+                Yaml::Boolean(_) => Ok(None),
+                _ => self.default_open_mode_exclusions(),
+            }
+        } else {
+            self.default_open_mode_exclusions()
+        }
+    }
+
     pub fn line_comment_prefix(&self, path: &PathBuf) -> Option<String> {
         let extension = path_extension(Some(path))?;
 
@@ -257,6 +289,16 @@ impl Preferences {
 
                 None
             })
+    }
+
+    fn default_open_mode_exclusions(&self) -> Result<Option<Vec<ExclusionPattern>>> {
+        let exclusions = self.default[OPEN_MODE_KEY][OPEN_MODE_EXCLUSIONS_KEY]
+            .as_vec()
+            .chain_err(|| "Couldn't find default open mode exclusions settings!")?;
+
+        open::exclusions::parse(exclusions)
+            .chain_err(|| "Failed to parse default open mode exclusions")
+            .map(Some)
     }
 }
 

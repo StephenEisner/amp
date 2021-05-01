@@ -1,6 +1,6 @@
-extern crate volt;
-use volt::Application;
-use volt::Error;
+extern crate amp;
+use amp::Application;
+use amp::Error;
 use std::env;
 
 fn main() {

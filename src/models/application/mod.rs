@@ -22,12 +22,28 @@ use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use crate::view::View;
 
-
+pub enum Mode {
+    Confirm(ConfirmMode),
+    Command(CommandMode),
+    Exit,
+    Insert,
+    Jump(JumpMode),
+    LineJump(LineJumpMode),
+    Path(PathMode),
+    Normal,
+    Open(OpenMode),
+    Select(SelectMode),
+    SelectLine(SelectLineMode),
+    Search(SearchMode),
+    SymbolJump(SymbolJumpMode),
+    Syntax(SyntaxMode),
+    Theme(ThemeMode),
+}
 
 pub struct Application {
-    pub mode: ModeID,
+    pub mode: Mode,
     pub workspace: Workspace,
-    pub string_buffer: Option<String>,
+    pub search_query: Option<String>,
     pub view: View,
     pub clipboard: Clipboard,
     pub repository: Option<Repository>,
@@ -35,8 +51,6 @@ pub struct Application {
     pub preferences: Rc<RefCell<Preferences>>,
     pub event_channel: Sender<Event>,
     events: Receiver<Event>,
-    pub command_buffer: Command,
-    pub save_on_accept: bool,
 }
 
 impl Application {
@@ -51,9 +65,9 @@ impl Application {
         let workspace = create_workspace(&mut view, &preferences.borrow(), args)?;
 
         Ok(Application {
-            mode: NormalMode::get_mode_id(),
+            mode: Mode::Normal,
             workspace,
-            string_buffer: None,
+            search_query: None,
             view,
             clipboard,
             repository: Repository::discover(&env::current_dir()?).ok(),
@@ -61,7 +75,6 @@ impl Application {
             preferences,
             event_channel,
             events,
-            save_on_accept: true,
         })
     }
 
@@ -88,7 +101,51 @@ impl Application {
     }
 
     fn present(&mut self) -> Result<()> {
-        self.mode.present(&self)
+        match self.mode {
+            Mode::Confirm(_) => {
+                presenters::modes::confirm::display(&mut self.workspace, &mut self.view)
+            }
+            Mode::Command(ref mut mode) => {
+                presenters::modes::search_select::display(&mut self.workspace, mode, &mut self.view)
+            }
+            Mode::Insert => presenters::modes::insert::display(&mut self.workspace, &mut self.view),
+            Mode::Open(ref mut mode) => {
+                presenters::modes::search_select::display(&mut self.workspace, mode, &mut self.view)
+            }
+            Mode::Search(ref mode) => {
+                presenters::modes::search::display(&mut self.workspace, mode, &mut self.view)
+            }
+            Mode::Jump(ref mut mode) => {
+                presenters::modes::jump::display(&mut self.workspace, mode, &mut self.view)
+            }
+            Mode::LineJump(ref mode) => {
+                presenters::modes::line_jump::display(&mut self.workspace, mode, &mut self.view)
+            }
+            Mode::Path(ref mode) => {
+                presenters::modes::path::display(&mut self.workspace, mode, &mut self.view)
+            }
+            Mode::SymbolJump(ref mut mode) => {
+                presenters::modes::search_select::display(&mut self.workspace, mode, &mut self.view)
+            }
+            Mode::Syntax(ref mut mode) => {
+                presenters::modes::search_select::display(&mut self.workspace, mode, &mut self.view)
+            }
+            Mode::Select(ref mode) => {
+                presenters::modes::select::display(&mut self.workspace, mode, &mut self.view)
+            }
+            Mode::SelectLine(ref mode) => {
+                presenters::modes::select_line::display(&mut self.workspace, mode, &mut self.view)
+            }
+            Mode::Normal => presenters::modes::normal::display(
+                &mut self.workspace,
+                &mut self.view,
+                &self.repository,
+            ),
+            Mode::Theme(ref mut mode) => {
+                presenters::modes::search_select::display(&mut self.workspace, mode, &mut self.view)
+            }
+            Mode::Exit => Ok(()),
+        }
     }
 
     fn wait_for_event(&mut self) -> Result<()> {
@@ -117,9 +174,48 @@ impl Application {
     }
 
     pub fn mode_str(&self) -> Option<&'static str> {
-        self.mode.get_id()
+        match self.mode {
+            Mode::Command(ref mode) => if mode.insert_mode() {
+                Some("search_select_insert")
+            } else {
+                Some("search_select")
+            },
+            Mode::SymbolJump(ref mode) => if mode.insert_mode() {
+                Some("search_select_insert")
+            } else {
+                Some("search_select")
+            },
+            Mode::Open(ref mode) => if mode.insert_mode() {
+                Some("search_select_insert")
+            } else {
+                Some("search_select")
+            },
+            Mode::Theme(ref mode) => if mode.insert_mode() {
+                Some("search_select_insert")
+            } else {
+                Some("search_select")
+            },
+            Mode::Syntax(ref mode) => if mode.insert_mode() {
+                Some("search_select_insert")
+            } else {
+                Some("search_select")
+            },
+            Mode::Normal => Some("normal"),
+            Mode::Path(_) => Some("path"),
+            Mode::Confirm(_) => Some("confirm"),
+            Mode::Insert => Some("insert"),
+            Mode::Jump(_) => Some("jump"),
+            Mode::LineJump(_) => Some("line_jump"),
+            Mode::Select(_) => Some("select"),
+            Mode::SelectLine(_) => Some("select_line"),
+            Mode::Search(ref mode) => if mode.insert_mode() {
+                Some("search_insert")
+            } else {
+                Some("search")
+            },
+            Mode::Exit => None,
+        }
     }
-
 }
 
 fn initialize_preferences() -> Rc<RefCell<Preferences>> {
