@@ -1,6 +1,9 @@
+use std::any::Any;
+use crate::errors::*;
 mod tag_generator;
 mod single_character_tag_generator;
 
+use crate::models::application::Application;
 use luthor::token::Category;
 use crate::util::movement_lexer;
 use std::collections::HashMap;
@@ -10,6 +13,9 @@ use crate::models::application::modes::select_line::SelectLineMode;
 use self::tag_generator::TagGenerator;
 use self::single_character_tag_generator::SingleCharacterTagGenerator;
 use crate::view::{LexemeMapper, MappedLexeme};
+
+use crate::models::application::modes::mode::Mode;
+use crate::presenters;
 
 /// Used to compose select and jump modes, allowing jump mode
 /// to be used for cursor navigation (to select a range of text).
@@ -59,6 +65,28 @@ impl JumpMode {
         self.tag_positions.clear();
         self.tag_generator.reset();
         self.single_characters.reset();
+    }
+}
+
+impl Mode for JumpMode {
+    fn mode_str(&self) -> Option<&'static str> {
+            Some("jump")
+    }
+
+    fn mode_id(&self) -> Option<&'static str> {
+            Some("jump")
+    }
+
+    fn present(&mut self, app :&mut Application) -> Result<()>{
+        presenters::modes::jump::display(&mut app.workspace, self, &mut app.view)
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any{
+        self
+    }
+
+    fn as_any(&self) -> &dyn Any{
+        self
     }
 }
 

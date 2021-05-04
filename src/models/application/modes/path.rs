@@ -1,3 +1,8 @@
+use std::any::Any;
+use crate::errors::*;
+use crate::models::application::modes::mode::Mode;
+use crate::models::application::Application;
+use crate::presenters;
 use std::fmt;
 
 pub struct PathMode {
@@ -23,5 +28,29 @@ impl PathMode {
 impl fmt::Display for PathMode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "PATH")
+    }
+}
+
+
+
+impl Mode for PathMode {
+    fn mode_str(&self) -> Option<&'static str> {
+            Some("path")
+    }
+
+    fn mode_id(&self) -> Option<&'static str> {
+            Some("path")
+    }
+
+    fn present(&mut self, app :&mut Application) -> Result<()>{
+        presenters::modes::path::display(&mut app.workspace, self, &mut app.view)
+    }
+
+    fn as_any(&self) -> &dyn Any{
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any{
+        self
     }
 }

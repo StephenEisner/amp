@@ -1,21 +1,12 @@
 //@author = StephenEisner
+use std::any::Any;
 use crate::models::application::Application;
+use crate::errors::*;
 
-pub trait Mode {
-     fn get_mode_id() -> ModeID;
-     fn present_func(app: &mut Application) -> Result<()>;
-}
-
-pub struct ModeID {
-    pub id: Option<&'static str>,
-    pub present: fn(&mut Application) -> Result<()>,
-}
-
-impl ModeID {
-    pub fn get_id(&self) -> Option<&'static str>{
-         return self.id;
-    }
-    pub fn set_id(&mut self, id: Option<&'static str>){
-        self.id = id;
-    }
+pub trait Mode: Any{
+     fn mode_str(&self) -> Option<&'static str>;
+     fn mode_id(&self) -> Option<&'static str>;
+     fn present(&mut self, app: &mut Application) -> Result<()>;
+     fn as_any(&self) -> &dyn Any;
+     fn as_any_mut(&mut self) -> &mut dyn Any;
 }

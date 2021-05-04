@@ -1,9 +1,9 @@
 Quick Start Guide
 =================
 
-Welcome to Amp! Before we get started, it's worth noting that there's a lot to
+Welcome to Volt! Before we get started, it's worth noting that there's a lot to
 cover. This guide isn't meant to be comprehensive; visit https://amp.rs/docs for
-a much more in-depth guide to using Amp.
+a much more in-depth guide to using Volt.
 
 --
 
@@ -25,7 +25,7 @@ the last and first line, respectively.
 You can also use the "w" and "b" keys to move forwards and backwards one word at
 a time.
 
-Beyond that, you're going to want to use Amp's jump mode to navigate. This mode
+Beyond that, you're going to want to use Volt's jump mode to navigate. This mode
 works by prefixing words with a jump token. Type the two letters in the jump
 token to move to the word.
 
@@ -55,7 +55,7 @@ are selected.
 Opening Files
 =============
 
-Hit the space key to switch to open mode. Amp will start recursively indexing
+Hit the space key to switch to open mode. Volt will start recursively indexing
 the current directory, which you can search. It's recommended to use small,
 space-separated tokens. Tokens must exist in the file's path to trigger a match,
 and they can be in any order. Once you've found a match, hit "enter". If it's
@@ -70,12 +70,12 @@ Managing Files
 
 You can switch between open files using the "tab" key. Press "s" to save the 
 current buffer. If you're done with a buffer, you can close it by hitting "q". 
-Amp will warn you if there are unsaved changes before closing the buffer.
+Volt will warn you if there are unsaved changes before closing the buffer.
 
 Exiting
 =======
 
-When you're done with Amp, hit "Q" to quit. It's worth noting that Amp won't
+When you're done with Volt, hit "Q" to quit. It's worth noting that Amp won't
 warn you about modified buffers when quitting. That's intentional! You may find
 it easier to close open buffers beforehand, and only quit from the splash
 screen.

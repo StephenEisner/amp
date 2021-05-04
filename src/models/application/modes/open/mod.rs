@@ -1,6 +1,9 @@
+use std::any::Any;
+use crate::errors::*;
 mod displayable_path;
 pub mod exclusions;
 
+use crate::models::application::Application;
 use std::fmt;
 use std::path::PathBuf;
 use std::slice::Iter;
@@ -12,6 +15,9 @@ use std::sync::mpsc::Sender;
 use std::thread;
 pub use bloodhound::Index;
 pub use self::displayable_path::DisplayablePath;
+
+use crate::models::application::modes::mode::Mode;
+use crate::presenters;
 
 #[derive(PartialEq)]
 pub enum OpenModeIndex {
@@ -50,6 +56,33 @@ impl OpenMode {
 
     pub fn set_index(&mut self, index: Index) {
         self.index = OpenModeIndex::Complete(index)
+    }
+}
+
+impl Mode for OpenMode {
+
+    fn as_any(&self) -> &dyn Any{
+        self
+    }
+
+    fn mode_str(&self) -> Option<&'static str> {
+            if self.insert_mode() {
+                Some("search_select_insert")
+            } else {
+                Some("search_select")
+            }
+    }
+
+    fn mode_id(&self) -> Option<&'static str> {
+        Some("open")
+    }
+
+    fn present(&mut self, app :&mut Application) -> Result<()>{
+        presenters::modes::search_select::display(&mut app.workspace, self, &mut app.view)
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any{
+        self
     }
 }
 

@@ -1,7 +1,8 @@
 use crate::errors::*;
 use crate::errors;
 use crate::commands::{self, Result};
-use crate::models::application::{Application, ClipboardContent, Mode};
+use crate::models::application::{Application, ClipboardContent};
+use crate::models::application::modes::SelectLineMode;
 use git2;
 use regex::Regex;
 
@@ -20,6 +21,7 @@ pub fn add(app: &mut Application) -> Result {
 }
 
 pub fn copy_remote_url(app: &mut Application) -> Result {
+    
     if let Some(ref mut repo) = app.repository {
         let buffer = app.workspace.current_buffer().ok_or(BUFFER_MISSING)?;
         let buffer_path = buffer.path.as_ref().ok_or(BUFFER_PATH_MISSING)?;
@@ -57,11 +59,15 @@ pub fn copy_remote_url(app: &mut Application) -> Result {
             "Couldn't find a git object ID for this file"
         )?;
 
-        let line_range = match app.mode {
-            Mode::SelectLine(ref s) => {
+        let line_range = match app.mode_stack.front().unwrap().mode_id() {
+            Some("select_line") => {
                 // Avoid zero-based line numbers.
                 let line_1 = buffer.cursor.line + 1;
-                let line_2 = s.anchor + 1;
+                let line_2 = app.mode_stack
+                    .front()
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<SelectLineMode>().unwrap().anchor + 1;
 
                 if line_1 < line_2 {
                     format!("#L{}-L{}", line_1, line_2)

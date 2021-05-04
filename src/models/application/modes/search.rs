@@ -1,8 +1,12 @@
+use std::any::Any;
 use crate::errors::*;
+use crate::models::application::Application;
 use crate::util::SelectableVec;
 use std::fmt;
 use scribe::buffer::{Buffer, Distance, Range};
 
+use crate::models::application::modes::mode::Mode;
+use crate::presenters;
 pub struct SearchMode {
     pub insert: bool,
     pub input: Option<String>,
@@ -47,6 +51,32 @@ impl SearchMode {
 impl fmt::Display for SearchMode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "SEARCH")
+    }
+}
+
+impl Mode for SearchMode {
+    fn mode_str(&self) -> Option<&'static str> {
+            if self.insert_mode() {
+                Some("search_insert")
+            } else {
+                Some("search")
+            }
+    }
+
+    fn mode_id(&self) -> Option<&'static str> {
+        Some("search")
+    }
+
+    fn present(&mut self, app :&mut Application) -> Result<()>{
+            presenters::modes::search::display(&mut app.workspace, self, &mut app.view)
+    }
+
+    fn as_any(&self) -> &dyn Any{
+        self
+    }
+    
+    fn as_any_mut(&mut self) -> &mut dyn Any{
+        self
     }
 }
 

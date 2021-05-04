@@ -11,6 +11,9 @@ mod select_line;
 mod symbol_jump;
 mod syntax;
 mod theme;
+mod normal;
+mod mode;
+mod insert;
 
 pub use self::confirm::ConfirmMode;
 pub use self::command::CommandMode;
@@ -25,3 +28,6 @@ pub use self::select_line::SelectLineMode;
 pub use self::symbol_jump::SymbolJumpMode;
 pub use self::syntax::SyntaxMode;
 pub use self::theme::ThemeMode;
+pub use self::normal::NormalMode;
+pub use self::insert::InsertMode;
+pub use self::mode::Mode;

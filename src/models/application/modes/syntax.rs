@@ -1,8 +1,13 @@
+use std::any::Any;
+use crate::errors::*;
 use fragment;
+use crate::models::application::Application;
 use crate::util::SelectableVec;
 use std::fmt;
 use std::slice::Iter;
 use crate::models::application::modes::{SearchSelectMode, SearchSelectConfig};
+use crate::models::application::modes::mode::Mode;
+use crate::presenters;
 
 pub struct SyntaxMode {
     insert: bool,
@@ -10,6 +15,28 @@ pub struct SyntaxMode {
     syntaxes: Vec<String>,
     results: SelectableVec<String>,
     config: SearchSelectConfig,
+}
+
+impl Mode for SyntaxMode {
+    fn mode_str(&self) -> Option<&'static str> {
+            Some("syntax")
+    }
+
+    fn mode_id(&self) -> Option<&'static str> {
+            Some("syntax")
+    }
+
+    fn present(&mut self, app :&mut Application) -> Result<()>{
+        presenters::modes::search_select::display(&mut app.workspace, self, &mut app.view)
+    }
+
+    fn as_any(&self) -> &dyn Any{
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any{
+        self
+    }
 }
 
 impl SyntaxMode {

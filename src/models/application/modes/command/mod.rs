@@ -1,4 +1,7 @@
+use std::any::Any;
+use crate::errors::*;
 mod displayable_command;
+use crate::models::application::Application;
 
 use fragment;
 use crate::util::SelectableVec;
@@ -9,12 +12,42 @@ use crate::models::application::modes::{SearchSelectMode, SearchSelectConfig};
 use crate::commands::{self, Command};
 pub use self::displayable_command::DisplayableCommand;
 
+use crate::models::application::modes::mode::Mode;
+use crate::presenters;
+
 pub struct CommandMode {
     insert: bool,
     input: String,
     commands: HashMap<&'static str, Command>,
     results: SelectableVec<DisplayableCommand>,
     config: SearchSelectConfig,
+}
+
+impl Mode for CommandMode {
+    fn mode_id(&self) -> Option<&'static str>{
+            Some("command")
+    }
+      
+    fn mode_str(&self) -> Option<&'static str> {
+        if self.insert_mode() {
+            Some("search_select_insert")
+        } else {
+            Some("search_select")
+        }
+    }
+
+    fn present(&mut self, app :&mut Application) -> Result<()>{
+        presenters::modes::search_select::display(&mut app.workspace, self, &mut app.view)
+    }
+
+    fn as_any(&self) -> &dyn Any{
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any{
+        self
+    }
+
 }
 
 impl CommandMode {
@@ -30,9 +63,9 @@ impl CommandMode {
 }
 
 impl fmt::Display for CommandMode {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "COMMAND")
-    }
+fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    write!(f, "COMMAND")
+}
 }
 
 impl SearchSelectMode<DisplayableCommand> for CommandMode {

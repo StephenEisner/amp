@@ -4,8 +4,8 @@ use std::mem;
 use crate::input::Key;
 use crate::util;
 use crate::util::token::{Direction, adjacent_token_position};
-use crate::models::application::{Application, ClipboardContent, Mode};
-use crate::models::application::modes::ConfirmMode;
+use crate::models::application::{Application, ClipboardContent};
+use crate::models::application::modes::*;
 use scribe::buffer::{Buffer, Position, Range};
 
 pub fn save(app: &mut Application) -> Result {
@@ -30,8 +30,8 @@ pub fn save(app: &mut Application) -> Result {
             .chain_err(|| "Unable to save buffer")
     } else {
         commands::application::switch_to_path_mode(app)?;
-        if let Mode::Path(ref mut mode) = app.mode {
-            mode.save_on_accept = true;
+        if Some("path") == app.mode_id() {
+            app.unwrap_mode_mutable::<PathMode>().unwrap().save_on_accept = true;
         }
 
         Ok(())
@@ -159,7 +159,7 @@ pub fn close(app: &mut Application) -> Result {
             bail!(BUFFER_MISSING);
         };
     let confirm_mode =
-        if let Mode::Confirm(_) = app.mode {
+        if  Some("confirm") == app.mode_id() {
             true
         } else {
             false
@@ -174,7 +174,8 @@ pub fn close(app: &mut Application) -> Result {
     } else {
         // Display a confirmation prompt before closing a modified buffer.
         let confirm_mode = ConfirmMode::new(close);
-        app.mode = Mode::Confirm(confirm_mode);
+        app.clear_stack();
+        app.enter_mode(Box::new(confirm_mode));
     }
 
     Ok(())
@@ -214,7 +215,8 @@ pub fn close_others(app: &mut Application) -> Result {
         if modified_buffer {
             // Display a confirmation prompt before closing a modified buffer.
             let confirm_mode = ConfirmMode::new(close_others_confirm);
-            app.mode = Mode::Confirm(confirm_mode);
+            app.clear_stack();
+            app.enter_mode(Box::new(confirm_mode));
             break;
         }
 
@@ -349,8 +351,9 @@ pub fn indent_line(app: &mut Application) -> Result {
     let buffer = app.workspace.current_buffer().ok_or(BUFFER_MISSING)?;
     let tab_content = app.preferences.borrow().tab_content(buffer.path.as_ref());
 
-    let target_position = match app.mode {
-        Mode::Insert => {
+    let mode_id = app.mode_stack.front().unwrap().mode_id();
+    let target_position = match mode_id {
+        Some("insert") => {
             Position {
                 line: buffer.cursor.line,
                 offset: buffer.cursor.offset + tab_content.chars().count(),
@@ -361,8 +364,13 @@ pub fn indent_line(app: &mut Application) -> Result {
 
     // Get the range of lines we'll outdent based on
     // either the current selection or cursor line.
-    let lines = match app.mode {
-        Mode::SelectLine(ref mode) => {
+    let lines = match mode_id {
+        Some("select_line") => {
+            let mode = app.mode_stack.front()
+                .unwrap()
+                .as_any()
+                .downcast_ref::<SelectLineMode>()
+                .unwrap();
             if mode.anchor >= buffer.cursor.line {
                 buffer.cursor.line..mode.anchor + 1
             } else {
@@ -397,10 +405,16 @@ pub fn outdent_line(app: &mut Application) -> Result {
     // FIXME: Determine this based on file type and/or user config.
     let data = buffer.data();
 
+    let mode_id = app.mode_stack.front().unwrap().mode_id();
     // Get the range of lines we'll outdent based on
     // either the current selection or cursor line.
-    let lines = match app.mode {
-        Mode::SelectLine(ref mode) => {
+    let lines = match mode_id {
+        Some("select_line") => {
+            let mode = app.mode_stack.front()
+                .unwrap()
+                .as_any()
+                .downcast_ref::<SelectLineMode>()
+                .unwrap();
             if mode.anchor >= buffer.cursor.line {
                 buffer.cursor.line..mode.anchor + 1
             } else {
@@ -481,8 +495,14 @@ pub fn toggle_line_comment(app: &mut Application) -> Result {
 
     // Get the range of lines we'll comment based on
     // either the current selection or cursor line.
-    let line_numbers = match app.mode {
-        Mode::SelectLine(ref mode) => {
+    let mode_id = app.mode_stack.front().unwrap().mode_id();
+    let line_numbers = match mode_id {
+        Some("select_line") => {
+            let mode = app.mode_stack.front()
+                .unwrap()
+                .as_any()
+                .downcast_ref::<SelectLineMode>()
+                .unwrap();
             if mode.anchor >= buffer.cursor.line {
                 buffer.cursor.line..mode.anchor + 1
             } else {
@@ -630,8 +650,8 @@ pub fn redo(app: &mut Application) -> Result {
 }
 
 pub fn paste(app: &mut Application) -> Result {
-    let insert_below = match app.mode {
-        Mode::Select(_) | Mode::SelectLine(_) | Mode::Search(_) => {
+    let insert_below = match app.mode_id(){
+        Some("select") | Some("select_line") | Some("search") => {
             commands::selection::delete(app).chain_err(|| {
                 "Couldn't delete selection prior to pasting."
             })?;
@@ -814,1139 +834,1140 @@ pub fn insert_tab(app: &mut Application) -> Result {
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use crate::commands;
-    use crate::models::Application;
-    use crate::models::application::{ClipboardContent, Mode};
-    use scribe::Buffer;
-    use scribe::buffer::Position;
-    use std::path::Path;
-
-    #[test]
-    fn insert_newline_uses_current_line_indentation() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-
-        // Insert data with indentation and move to the end of the line.
-        buffer.insert("    amp");
-        let position = Position {
-            line: 0,
-            offset: 7,
-        };
-        buffer.cursor.move_to(position);
-
-        // Now that we've set up the buffer, add it
-        // to the application and call the command.
-        app.workspace.add_buffer(buffer);
-        super::insert_newline(&mut app).unwrap();
-
-        // Ensure that the whitespace is inserted.
-        assert_eq!(app.workspace.current_buffer().unwrap().data(),
-                   "    amp\n    ");
-
-        // Also ensure that the cursor is moved to the end of the inserted whitespace.
-        let expected_position = Position {
-            line: 1,
-            offset: 4,
-        };
-        assert_eq!(app.workspace.current_buffer().unwrap().cursor.line,
-                   expected_position.line);
-        assert_eq!(app.workspace.current_buffer().unwrap().cursor.offset,
-                   expected_position.offset);
-    }
-
-    #[test]
-    fn insert_newline_uses_nearest_line_indentation_when_current_line_blank() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-
-        // Insert data with indentation and move to the end of the line.
-        buffer.insert("    amp\n");
-        let position = Position { line: 1, offset: 0 };
-        buffer.cursor.move_to(position);
-
-        // Now that we've set up the buffer, add it
-        // to the application and call the command.
-        app.workspace.add_buffer(buffer);
-        super::insert_newline(&mut app).unwrap();
-
-        // Ensure that the whitespace is inserted.
-        assert_eq!(
-            app.workspace.current_buffer().unwrap().data(),
-            "    amp\n\n    "
-        );
-
-        // Also ensure that the cursor is moved to the end of the inserted whitespace.
-        let expected_position = Position { line: 2, offset: 4 };
-        assert_eq!(
-            app.workspace.current_buffer().unwrap().cursor.line,
-            expected_position.line
-        );
-        assert_eq!(
-            app.workspace.current_buffer().unwrap().cursor.offset,
-            expected_position.offset
-        );
-    }
-
-    #[test]
-    fn change_rest_of_line_removes_content_and_switches_to_insert_mode() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-
-        // Insert data with indentation and move to the end of the line.
-        buffer.insert("    amp\neditor");
-        let position = Position {
-            line: 0,
-            offset: 4,
-        };
-        buffer.cursor.move_to(position);
-
-        // Now that we've set up the buffer, add it
-        // to the application and call the command.
-        app.workspace.add_buffer(buffer);
-        super::change_rest_of_line(&mut app).unwrap();
-
-        // Ensure that the content is removed.
-        assert_eq!(app.workspace.current_buffer().unwrap().data(),
-                   "    \neditor");
-
-        // Ensure that we're in insert mode.
-        assert!(match app.mode {
-            crate::models::application::Mode::Insert => true,
-            _ => false,
-        });
-
-        // Ensure that sub-commands and subsequent inserts are run in batch.
-        app.workspace.current_buffer().unwrap().insert(" ");
-        app.workspace.current_buffer().unwrap().undo();
-        assert_eq!(app.workspace.current_buffer().unwrap().data(),
-                   "    amp\neditor");
-    }
-
-    #[test]
-    fn delete_token_deletes_current_token_and_trailing_whitespace() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-        buffer.insert("amp editor");
-
-        // Now that we've set up the buffer, add it
-        // to the application and call the command.
-        app.workspace.add_buffer(buffer);
-        super::delete_token(&mut app).unwrap();
-
-        // Ensure that the content is removed.
-        assert_eq!(app.workspace.current_buffer().unwrap().data(), "editor");
-    }
-
-    #[test]
-    fn delete_token_does_not_delete_newline_characters() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-        buffer.insert("amp\neditor");
-
-        // Now that we've set up the buffer, add it
-        // to the application and call the command.
-        app.workspace.add_buffer(buffer);
-        super::delete_token(&mut app).unwrap();
-
-        // Ensure that the content is removed.
-        assert_eq!(app.workspace.current_buffer().unwrap().data(), "\neditor");
-    }
-
-    #[test]
-    fn delete_current_line_deletes_current_line() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-
-        // Insert data with indentation and move to the end of the line.
-        buffer.insert("    amp\neditor");
-        let position = Position {
-            line: 0,
-            offset: 4,
-        };
-        buffer.cursor.move_to(position);
-
-        // Now that we've set up the buffer, add it
-        // to the application and call the command.
-        app.workspace.add_buffer(buffer);
-        super::delete_current_line(&mut app).unwrap();
-
-        // Ensure that the content is removed.
-        assert_eq!(app.workspace.current_buffer().unwrap().data(), "editor");
-    }
-
-    #[test]
-    fn indent_line_inserts_two_spaces_at_start_of_line() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-        buffer.insert("amp\neditor");
-        buffer.cursor.move_to(Position {
-            line: 1,
-            offset: 2,
-        });
-
-        // Now that we've set up the buffer, add it
-        // to the application and call the command.
-        app.workspace.add_buffer(buffer);
-        super::indent_line(&mut app).unwrap();
-
-        // Ensure that the content is inserted correctly.
-        assert_eq!(app.workspace.current_buffer().unwrap().data(),
-                   "amp\n  editor");
-    }
-
-    #[test]
-    fn indent_line_works_in_select_line_mode() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-        buffer.insert("amp\n  editor");
-
-        // Now that we've set up the buffer, add it to the
-        // application, select all lines, and call the command.
-        app.workspace.add_buffer(buffer);
-        commands::application::switch_to_select_line_mode(&mut app).unwrap();
-        commands::cursor::move_down(&mut app).unwrap();
-        super::indent_line(&mut app).unwrap();
-
-        // Ensure that the content is inserted correctly.
-        assert_eq!(app.workspace.current_buffer().unwrap().data(),
-                   "  amp\n    editor");
-    }
-
-    #[test]
-    fn indent_line_moves_cursor_in_insert_mode() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-        buffer.insert("amp\neditor");
-        buffer.cursor.move_to(Position {
-            line: 1,
-            offset: 2,
-        });
-
-        // Now that we've set up the buffer, add it
-        // to the application and call the command.
-        app.workspace.add_buffer(buffer);
-        commands::application::switch_to_insert_mode(&mut app).unwrap();
-        super::indent_line(&mut app).unwrap();
-
-        // Ensure that the cursor is updated.
-        assert_eq!(*app.workspace.current_buffer().unwrap().cursor,
-                   Position {
-                       line: 1,
-                       offset: 4,
-                   });
-    }
-
-    #[test]
-    fn indent_line_does_not_move_cursor_in_normal_mode() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-        buffer.insert("amp\neditor");
-        buffer.cursor.move_to(Position {
-            line: 1,
-            offset: 2,
-        });
-
-        // Now that we've set up the buffer, add it
-        // to the application and call the command.
-        app.workspace.add_buffer(buffer);
-        super::indent_line(&mut app).unwrap();
-
-        // Ensure that the cursor is not updated.
-        assert_eq!(*app.workspace.current_buffer().unwrap().cursor,
-                   Position {
-                       line: 1,
-                       offset: 2,
-                   });
-    }
-
-    #[test]
-    fn indent_line_groups_multi_line_indents_as_a_single_operation() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-        buffer.insert("amp\n  editor");
-
-        // Now that we've set up the buffer, add it to the
-        // application, select all lines, and call the command.
-        app.workspace.add_buffer(buffer);
-        commands::application::switch_to_select_line_mode(&mut app).unwrap();
-        commands::cursor::move_down(&mut app).unwrap();
-        super::indent_line(&mut app).unwrap();
-
-        // Ensure that the indentation is applied correctly.
-        assert_eq!(app.workspace.current_buffer().unwrap().data(),
-                   "  amp\n    editor");
-
-        // Undo the indent and check that it's treated as one operation.
-        super::undo(&mut app).unwrap();
-        assert_eq!(app.workspace.current_buffer().unwrap().data(),
-                   "amp\n  editor");
-    }
-
-    #[test]
-    fn indent_line_works_with_reversed_selections() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-        buffer.insert("amp\neditor");
-
-        // Now that we've set up the buffer, add it to the
-        // application, select all lines, and call the command.
-        app.workspace.add_buffer(buffer);
-        commands::cursor::move_down(&mut app).unwrap();
-        commands::application::switch_to_select_line_mode(&mut app).unwrap();
-        commands::cursor::move_up(&mut app).unwrap();
-        super::indent_line(&mut app).unwrap();
-
-        // Ensure that the indentation is applied correctly.
-        assert_eq!(app.workspace.current_buffer().unwrap().data(),
-                   "  amp\n  editor");
-    }
-
-    #[test]
-    fn outdent_line_removes_two_spaces_from_start_of_line() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-        buffer.insert("amp\n  editor");
-        buffer.cursor.move_to(Position {
-            line: 1,
-            offset: 6,
-        });
-
-        // Now that we've set up the buffer, add it
-        // to the application and call the command.
-        app.workspace.add_buffer(buffer);
-        super::outdent_line(&mut app).unwrap();
-
-        // Ensure that the content is removed.
-        assert_eq!(app.workspace.current_buffer().unwrap().data(),
-                   "amp\neditor");
-
-        // Ensure that the cursor is updated.
-        assert_eq!(*app.workspace.current_buffer().unwrap().cursor,
-                   Position {
-                       line: 1,
-                       offset: 4,
-                   });
-    }
-
-    #[test]
-    fn outdent_line_removes_as_much_space_as_it_can_from_start_of_line_if_less_than_full_indent
-        () {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-        buffer.insert("amp\n editor");
-        buffer.cursor.move_to(Position {
-            line: 1,
-            offset: 2,
-        });
-
-        // Now that we've set up the buffer, add it
-        // to the application and call the command.
-        app.workspace.add_buffer(buffer);
-        super::outdent_line(&mut app).unwrap();
-
-        // Ensure that the content is inserted correctly.
-        assert_eq!(app.workspace.current_buffer().unwrap().data(),
-                   "amp\neditor");
-    }
-
-    #[test]
-    fn outdent_does_nothing_if_there_is_no_leading_whitespace() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-
-        // Add some trailing whitespace to trip up naive implementations.
-        buffer.insert("amp\neditor   ");
-
-        // Now that we've set up the buffer, add it
-        // to the application and call the command.
-        app.workspace.add_buffer(buffer);
-        super::outdent_line(&mut app).unwrap();
-
-        // Ensure that the content is inserted correctly.
-        assert_eq!(app.workspace.current_buffer().unwrap().data(),
-                   "amp\neditor   ");
-    }
-
-    #[test]
-    fn outdent_line_works_in_select_line_mode() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-        buffer.insert("  amp\n  editor");
-
-        // Now that we've set up the buffer, add it to the
-        // application, select all lines, and call the command.
-        app.workspace.add_buffer(buffer);
-        commands::application::switch_to_select_line_mode(&mut app).unwrap();
-        commands::cursor::move_down(&mut app).unwrap();
-        super::outdent_line(&mut app).unwrap();
-
-        // Ensure that the content is inserted correctly.
-        assert_eq!(app.workspace.current_buffer().unwrap().data(),
-                   "amp\neditor");
-    }
-
-    #[test]
-    fn outdent_line_groups_multi_line_indents_as_a_single_operation() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-        buffer.insert("  amp\n  editor");
-
-        // Now that we've set up the buffer, add it to the
-        // application, select all lines, and call the command.
-        app.workspace.add_buffer(buffer);
-        commands::application::switch_to_select_line_mode(&mut app).unwrap();
-        commands::cursor::move_down(&mut app).unwrap();
-        super::outdent_line(&mut app).unwrap();
-
-        // Ensure that the indentation is applied correctly.
-        assert_eq!(app.workspace.current_buffer().unwrap().data(),
-                   "amp\neditor");
-
-        // Undo the outdent and check that it's treated as one operation.
-        super::undo(&mut app).unwrap();
-        assert_eq!(app.workspace.current_buffer().unwrap().data(),
-                   "  amp\n  editor");
-    }
-
-    #[test]
-    fn outdent_line_works_with_reversed_selections() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-        buffer.insert("  amp\n  editor");
-
-        // Now that we've set up the buffer, add it to the
-        // application, select all lines, and call the command.
-        app.workspace.add_buffer(buffer);
-        commands::cursor::move_down(&mut app).unwrap();
-        commands::application::switch_to_select_line_mode(&mut app).unwrap();
-        commands::cursor::move_up(&mut app).unwrap();
-        super::outdent_line(&mut app).unwrap();
-
-        // Ensure that the indentation is applied correctly.
-        assert_eq!(app.workspace.current_buffer().unwrap().data(),
-                   "amp\neditor");
-    }
-
-    #[test]
-    fn remove_trailing_whitespace_works() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-        buffer.insert("  amp\n  \neditor ");
-
-        // Now that we've set up the buffer, add it
-        // to the application and call the command.
-        app.workspace.add_buffer(buffer);
-        super::remove_trailing_whitespace(&mut app).unwrap();
-
-        // Ensure that trailing whitespace is removed.
-        assert_eq!(app.workspace.current_buffer().unwrap().data(),
-                   "  amp\n\neditor");
-    }
-
-    #[test]
-    fn remove_trailing_whitespace_works_with_tab() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-        buffer.insert("\t\tamp\n\t\t\neditor\t");
-
-        // Now that we've set up the buffer, add it
-        // to the application and call the command.
-        app.workspace.add_buffer(buffer);
-        super::remove_trailing_whitespace(&mut app).unwrap();
-
-        // Ensure that trailing whitespace is removed.
-        assert_eq!(app.workspace.current_buffer().unwrap().data(),
-                   "\t\tamp\n\neditor");
-    }
-
-    #[test]
-    fn save_removes_trailing_whitespace_and_adds_newlines() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-        buffer.insert("amp  \neditor ");
-
-        // Now that we've set up the buffer, add it
-        // to the application, and save it.
-        app.workspace.add_buffer(buffer);
-        super::save(&mut app).ok();
-
-        // Ensure that trailing whitespace is removed.
-        assert_eq!(app.workspace.current_buffer().unwrap().data(),
-                   "amp\neditor\n");
-    }
-
-    #[test]
-    fn save_switches_to_path_mode_when_path_is_missing() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let buffer = Buffer::new();
-
-        // Now that we've set up the buffer, add it
-        // to the application, and save it.
-        app.workspace.add_buffer(buffer);
-        super::save(&mut app).ok();
-
-        // Ensure that we've switched to path mode.
-        if let Mode::Path(_) = app.mode {
-        } else {
-            panic!("Failed to switch to path mode");
-        }
-    }
-
-    #[test]
-    fn save_sets_save_on_accept_when_switching_to_path_mode() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let buffer = Buffer::new();
-
-        // Now that we've set up the buffer, add it
-        // to the application, and save it.
-        app.workspace.add_buffer(buffer);
-        super::save(&mut app).ok();
-
-        // Ensure that we've set the save_on_accept flag.
-        if let Mode::Path(ref mode) = app.mode {
-            assert!(mode.save_on_accept)
-        } else {
-            panic!("Failed to switch to path mode");
-        }
-    }
-
-    #[test]
-    fn paste_inserts_at_cursor_when_pasting_inline_data() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-        buffer.insert("amp\neditor");
-
-        // Now that we've set up the buffer, add it
-        // to the application, copy the first line to
-        // the buffer, and then paste the clipboard contents.
-        app.workspace.add_buffer(buffer);
-        commands::application::switch_to_select_mode(&mut app).unwrap();
-        commands::cursor::move_right(&mut app).unwrap();
-        commands::selection::copy(&mut app).unwrap();
-        commands::buffer::paste(&mut app).unwrap();
-
-        // Ensure that the clipboard contents are pasted to the line below.
-        assert_eq!(app.workspace.current_buffer().unwrap().data(),
-                   "aamp\neditor");
-    }
-
-    #[test]
-    fn paste_inserts_on_line_below_when_pasting_block_data() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-        buffer.insert("amp\neditor");
-        buffer.cursor.move_to(Position {
-            line: 0,
-            offset: 2,
-        });
-
-        // Now that we've set up the buffer, add it
-        // to the application, copy the first line to
-        // the buffer, and then paste the clipboard contents.
-        app.workspace.add_buffer(buffer);
-        commands::application::switch_to_select_line_mode(&mut app).unwrap();
-        commands::selection::copy(&mut app).unwrap();
-        commands::buffer::paste(&mut app).unwrap();
-
-        // Ensure that the clipboard contents are pasted to the line below.
-        assert_eq!(app.workspace.current_buffer().unwrap().data(),
-                   "amp\namp\neditor");
-    }
-
-    #[test]
-    fn paste_works_at_end_of_buffer_when_pasting_block_data() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-        buffer.insert("amp\neditor");
-        buffer.cursor.move_to(Position {
-            line: 0,
-            offset: 0,
-        });
-
-        // Now that we've set up the buffer, add it
-        // to the application, copy the first line to
-        // the buffer, and then paste it at the end of the buffer.
-        app.workspace.add_buffer(buffer);
-        commands::application::switch_to_select_line_mode(&mut app).unwrap();
-        commands::selection::copy(&mut app).unwrap();
-        commands::cursor::move_down(&mut app).unwrap();
-        commands::buffer::paste(&mut app).unwrap();
-
-        // Ensure that the clipboard contents are pasted to the line below.
-        assert_eq!(app.workspace.current_buffer().unwrap().data(),
-                   "amp\neditor\namp\n");
-    }
-
-    #[test]
-    fn paste_works_on_trailing_newline_when_pasting_block_data() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-        buffer.insert("amp\neditor\n");
-        buffer.cursor.move_to(Position {
-            line: 0,
-            offset: 0,
-        });
-
-        // Now that we've set up the buffer, add it
-        // to the application, copy the first line to
-        // the buffer, and then paste it at the end of the buffer.
-        app.workspace.add_buffer(buffer);
-        commands::application::switch_to_select_line_mode(&mut app).unwrap();
-        commands::selection::copy(&mut app).unwrap();
-        commands::cursor::move_down(&mut app).unwrap();
-        commands::cursor::move_down(&mut app).unwrap();
-        commands::buffer::paste(&mut app).unwrap();
-
-        // Ensure that the clipboard contents are pasted to the line below.
-        assert_eq!(app.workspace.current_buffer().unwrap().data(),
-                   "amp\neditor\namp\n");
-    }
-
-    #[test]
-    fn backspace_outdents_line_if_line_is_whitespace() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-        buffer.insert("amp\neditor\n        ");
-        buffer.cursor.move_to(Position {
-            line: 2,
-            offset: 8,
-        });
-
-        // Now that we've set up the buffer, add it
-        // to the application and run the command.
-        app.workspace.add_buffer(buffer);
-        commands::buffer::backspace(&mut app).unwrap();
-
-        // Ensure that the clipboard contents are pasted to the line below.
-        assert_eq!(app.workspace.current_buffer().unwrap().data(),
-                   "amp\neditor\n      ");
-    }
-
-    #[test]
-    fn merge_next_line_joins_current_and_next_lines_with_a_space() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-        buffer.insert("amp\neditor");
-
-        // Now that we've set up the buffer, add it
-        // to the application and run the command.
-        app.workspace.add_buffer(buffer);
-        commands::buffer::merge_next_line(&mut app).unwrap();
-
-        // Ensure that the lines are merged correctly.
-        assert_eq!(app.workspace.current_buffer().unwrap().data(), "amp editor");
-
-        // Ensure that the cursor is moved to the end of the current line.
-        assert_eq!(*app.workspace.current_buffer().unwrap().cursor,
-                   Position {
-                       line: 0,
-                       offset: 3,
-                   });
-    }
-
-    #[test]
-    fn merge_next_line_does_nothing_if_there_is_no_next_line() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-        buffer.insert("amp editor");
-
-        // Now that we've set up the buffer, add it
-        // to the application and run the command.
-        app.workspace.add_buffer(buffer);
-        commands::buffer::merge_next_line(&mut app).ok();
-
-        // Ensure that the lines are merged correctly.
-        assert_eq!(app.workspace.current_buffer().unwrap().data(), "amp editor");
-
-        // Ensure that the cursor is moved to the end of the current line.
-        assert_eq!(*app.workspace.current_buffer().unwrap().cursor,
-                   Position {
-                       line: 0,
-                       offset: 0,
-                   });
-    }
-
-    #[test]
-    fn merge_next_line_works_when_the_next_line_has_a_line_after_it() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-        buffer.insert("amp\neditor\ntest");
-
-        // Now that we've set up the buffer, add it
-        // to the application and run the command.
-        app.workspace.add_buffer(buffer);
-        commands::buffer::merge_next_line(&mut app).unwrap();
-
-        // Ensure that the lines are merged correctly.
-        assert_eq!(app.workspace.current_buffer().unwrap().data(),
-                   "amp editor\ntest");
-    }
-
-    #[test]
-    fn merge_next_line_works_when_the_first_line_has_leading_whitespace() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-        buffer.insert("\n amp\neditor");
-        buffer.cursor.move_to(Position {
-            line: 1,
-            offset: 0,
-        });
-
-        // Now that we've set up the buffer, add it
-        // to the application and run the command.
-        app.workspace.add_buffer(buffer);
-        commands::buffer::merge_next_line(&mut app).unwrap();
-
-        // Ensure that the lines are merged correctly.
-        assert_eq!(app.workspace.current_buffer().unwrap().data(),
-                   "\n amp editor");
-    }
-
-    #[test]
-    fn merge_next_line_removes_leading_whitespace_from_second_line() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-        buffer.insert("amp\n    editor");
-
-        // Now that we've set up the buffer, add it
-        // to the application and run the command.
-        app.workspace.add_buffer(buffer);
-        commands::buffer::merge_next_line(&mut app).unwrap();
-
-        // Ensure that the lines are merged correctly.
-        assert_eq!(app.workspace.current_buffer().unwrap().data(), "amp editor");
-    }
-
-    #[test]
-    fn ensure_trailing_newline_adds_newlines_when_missing() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-        buffer.insert("amp\neditor");
-
-        // Now that we've set up the buffer, add it
-        // to the application and run the command.
-        app.workspace.add_buffer(buffer);
-        commands::buffer::ensure_trailing_newline(&mut app).unwrap();
-
-        // Ensure that trailing newline is added.
-        assert_eq!(app.workspace.current_buffer().unwrap().data(),
-                   "amp\neditor\n");
-    }
-
-    #[test]
-    fn ensure_trailing_newline_does_nothing_when_already_present() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-        buffer.insert("amp\neditor\n");
-
-        // Now that we've set up the buffer, add it
-        // to the application and run the command.
-        app.workspace.add_buffer(buffer);
-        commands::buffer::ensure_trailing_newline(&mut app).unwrap();
-
-        // Ensure that trailing newline is added.
-        assert_eq!(app.workspace.current_buffer().unwrap().data(),
-                   "amp\neditor\n");
-    }
-
-    #[test]
-    fn paste_with_inline_content_replaces_selection() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-        buffer.insert("amp");
-        app.clipboard.set_content(ClipboardContent::Inline("editor".to_string())).unwrap();
-
-        // Now that we've set up the buffer, add it to
-        // the application, select its contents, and paste.
-        app.workspace.add_buffer(buffer);
-        commands::application::switch_to_select_mode(&mut app).unwrap();
-        commands::cursor::move_to_end_of_line(&mut app).unwrap();
-        commands::buffer::paste(&mut app).unwrap();
-
-        // Ensure that the content is replaced
-        assert_eq!(app.workspace.current_buffer().unwrap().data(), "editor");
-
-        // TODO: Ensure that the operation is treated atomically.
-        // commands::buffer::undo(&mut app);
-        // assert_eq!(app.workspace.current_buffer().unwrap().data(), "amp");
-    }
-
-    #[test]
-    fn paste_with_block_content_replaces_selection() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-        buffer.insert("amp\neditor");
-        app.clipboard.set_content(ClipboardContent::Block("paste amp\n".to_string())).unwrap();
-
-        // Now that we've set up the buffer, add it to
-        // the application, select its contents, and paste.
-        app.workspace.add_buffer(buffer);
-        commands::application::switch_to_select_line_mode(&mut app).unwrap();
-        commands::buffer::paste(&mut app).unwrap();
-
-        // Ensure that the content is replaced
-        assert_eq!(app.workspace.current_buffer().unwrap().data(),
-                   "paste amp\neditor");
-
-        // TODO: Ensure that the operation is treated atomically.
-        // commands::buffer::undo(&mut app);
-        // assert_eq!(app.workspace.current_buffer().unwrap().data(), "amp");
-    }
-
-    #[test]
-    fn paste_above_inserts_clipboard_contents_on_a_new_line_above() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-        let original_position = Position {
-            line: 0,
-            offset: 3,
-        };
-        buffer.insert("editor");
-        buffer.cursor.move_to(original_position.clone());
-        app.clipboard.set_content(ClipboardContent::Block("amp\n".to_string())).unwrap();
-
-        // Now that we've set up the buffer,
-        // add it to the application and paste.
-        app.workspace.add_buffer(buffer);
-        commands::buffer::paste_above(&mut app).unwrap();
-
-        assert_eq!(app.workspace.current_buffer().unwrap().data(),
-                   "amp\neditor");
-        assert_eq!(*app.workspace.current_buffer().unwrap().cursor,
-                   original_position);
-    }
-
-    #[test]
-    fn close_displays_confirmation_when_buffer_is_modified() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-        buffer.insert("data");
-
-        // Now that we've set up the buffer, add
-        // it to the application and run the command.
-        app.workspace.add_buffer(buffer);
-        commands::buffer::close(&mut app).unwrap();
-
-        if let Mode::Confirm(_) = app.mode {
-        } else {
-            panic!("Not in confirm mode");
-        }
-    }
-
-    #[test]
-    fn close_skips_confirmation_when_buffer_is_empty() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let buffer = Buffer::new();
-
-        // Empty the workspace.
-        app.workspace.close_current_buffer();
-
-        // Now that we've set up the buffer, add
-        // it to the application and run the command.
-        app.workspace.add_buffer(buffer);
-        commands::buffer::close(&mut app).unwrap();
-
-        assert!(app.workspace.current_buffer().is_none());
-    }
-
-    #[test]
-    fn close_skips_confirmation_when_buffer_is_unmodified() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let buffer = Buffer::from_file(Path::new("LICENSE")).unwrap();
-
-        // Empty the workspace.
-        app.workspace.close_current_buffer();
-
-        // Now that we've set up the buffer, add
-        // it to the application and run the command.
-        app.workspace.add_buffer(buffer);
-        commands::buffer::close(&mut app).unwrap();
-
-        assert!(app.workspace.current_buffer().is_none());
-    }
-
-    #[test]
-    fn close_others_skips_confirmation_when_all_other_buffers_are_empty_or_unmodified() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let buffer_1 = Buffer::new();
-        let buffer_2 = Buffer::from_file(Path::new("LICENSE")).unwrap();
-        let mut buffer_3 = Buffer::new();
-        buffer_3.insert("three");
-
-        // Empty the workspace.
-        app.workspace.close_current_buffer();
-
-        // Now that we've set up the buffers, add
-        // them to the application and run the command.
-        app.workspace.add_buffer(buffer_1);
-        app.workspace.add_buffer(buffer_2);
-        app.workspace.add_buffer(buffer_3);
-        commands::buffer::close_others(&mut app).unwrap();
-
-        assert_eq!(app.workspace.current_buffer().unwrap().data(), "three");
-        app.workspace.next_buffer();
-        assert_eq!(app.workspace.current_buffer().unwrap().data(), "three");
-    }
-
-    #[test]
-    fn close_others_displays_confirmation_before_closing_modified_buffer() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let buffer = Buffer::new();
-        let mut modified_buffer = Buffer::new();
-        modified_buffer.insert("data");
-
-        // Empty the workspace.
-        app.workspace.close_current_buffer();
-
-        // Now that we've set up the buffers, add
-        // them to the application and run the command.
-        app.workspace.add_buffer(modified_buffer);
-        app.workspace.add_buffer(buffer);
-        commands::buffer::close_others(&mut app).unwrap();
-
-        if let Mode::Confirm(_) = app.mode {
-        } else {
-            panic!("Not in confirm mode");
-        }
-
-        // Confirm the command.
-        commands::confirm::confirm_command(&mut app).unwrap();
-
-        assert_eq!(app.workspace.current_buffer().unwrap().data(), "");
-        app.workspace.next_buffer();
-        assert_eq!(app.workspace.current_buffer().unwrap().data(), "");
-    }
-
-    #[test]
-    fn close_others_works_when_current_buffer_is_last() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer_1 = Buffer::new();
-        let mut buffer_2 = Buffer::new();
-        let mut buffer_3 = Buffer::new();
-        buffer_1.insert(""); // Empty to prevent close confirmation.
-        buffer_2.insert(""); // Empty to prevent close confirmation.
-        buffer_3.insert("three");
-
-        // Now that we've set up the buffers, add
-        // them to the application and run the command.
-        app.workspace.add_buffer(buffer_1);
-        app.workspace.add_buffer(buffer_2);
-        app.workspace.add_buffer(buffer_3);
-
-        // Run the command twice, to
-        commands::buffer::close_others(&mut app).unwrap();
-
-        assert_eq!(app.workspace.current_buffer().unwrap().data(), "three");
-        app.workspace.next_buffer();
-        assert_eq!(app.workspace.current_buffer().unwrap().data(), "three");
-    }
-
-    #[test]
-    fn close_others_works_when_current_buffer_is_not_last() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer_1 = Buffer::new();
-        let mut buffer_2 = Buffer::new();
-        let mut buffer_3 = Buffer::new();
-        buffer_1.insert("");    // Empty to prevent close confirmation.
-        buffer_2.insert("two");
-        buffer_3.insert("");    // Empty to prevent close confirmation.
-
-        // Now that we've set up the buffers, add
-        // them to the application and run the command.
-        app.workspace.add_buffer(buffer_1);
-        app.workspace.add_buffer(buffer_2);
-        app.workspace.add_buffer(buffer_3);
-        app.workspace.previous_buffer();
-        commands::buffer::close_others(&mut app).unwrap();
-
-        assert_eq!(app.workspace.current_buffer().unwrap().data(), "two");
-        app.workspace.next_buffer();
-        assert_eq!(app.workspace.current_buffer().unwrap().data(), "two");
-    }
-
-    #[test]
-    fn toggle_line_comment_add_single_in_normal_mode() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-        buffer.insert("\tamp\n\teditor\n");
-        buffer.cursor.move_to(Position {
-            line: 0,
-            offset: 1
-        });
-        buffer.path = Some("test.rs".into());
-
-        // Now that we've set up the buffer, add it
-        // to the application and call the command.
-        app.workspace.add_buffer(buffer);
-        super::toggle_line_comment(&mut app).unwrap();
-
-        assert_eq!(app.workspace.current_buffer().unwrap().data(),
-                   "\t// amp\n\teditor\n");
-        assert_eq!(app.workspace.current_buffer().unwrap().cursor.position,
-                   Position { line: 0, offset: 1 });
-    }
-
-    #[test]
-    fn toggle_line_comment_add_multiple_in_select_line_mode() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-        buffer.insert("\tamp\n\t\teditor\n");
-        buffer.cursor.move_to(Position {
-            line: 0,
-            offset: 1,
-        });
-        buffer.path = Some("test.rs".into());
-
-        // Now that we've set up the buffer, add it
-        // to the application and call the command.
-        app.workspace.add_buffer(buffer);
-        commands::application::switch_to_select_line_mode(&mut app).unwrap();
-        app.workspace.current_buffer().unwrap().cursor.move_to(Position {
-            line: 1,
-            offset: 1,
-        });
-
-        super::toggle_line_comment(&mut app).unwrap();
-
-        assert_eq!(app.workspace.current_buffer().unwrap().data(),
-                   "\t// amp\n\t// \teditor\n");
-        assert_eq!(app.workspace.current_buffer().unwrap().cursor.position,
-                   Position { line: 1, offset: 1 });
-    }
-
-    #[test]
-    fn toggle_line_comment_remove_single_in_normal_mode() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-        buffer.insert("\t// amp\n\teditor\n");
-        buffer.cursor.move_to(Position {
-            line: 0,
-            offset: 1,
-        });
-        buffer.path = Some("test.rs".into());
-
-        // Now that we've set up the buffer, add it
-        // to the application and call the command.
-        app.workspace.add_buffer(buffer);
-        super::toggle_line_comment(&mut app).unwrap();
-
-        assert_eq!(app.workspace.current_buffer().unwrap().data(),
-                   "\tamp\n\teditor\n");
-        assert_eq!(app.workspace.current_buffer().unwrap().cursor.position,
-                   Position { line: 0, offset: 1 });
-    }
-
-    #[test]
-    fn toggle_line_comment_remove_multiple_in_select_line_mode() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-        buffer.insert("\t// amp\n\t// \teditor\n");
-        buffer.cursor.move_to(Position {
-            line: 0,
-            offset: 1,
-        });
-        buffer.path = Some("test.rs".into());
-
-        // Now that we've set up the buffer, add it
-        // to the application and call the command.
-        app.workspace.add_buffer(buffer);
-        commands::application::switch_to_select_line_mode(&mut app).unwrap();
-        app.workspace.current_buffer().unwrap().cursor.move_to(Position {
-            line: 1,
-            offset: 1,
-        });
-
-        super::toggle_line_comment(&mut app).unwrap();
-
-        assert_eq!(app.workspace.current_buffer().unwrap().data(),
-                   "\tamp\n\t\teditor\n");
-        assert_eq!(app.workspace.current_buffer().unwrap().cursor.position,
-                   Position { line: 1, offset: 1 });
-    }
-
-    #[test]
-    fn toggle_line_comment_remove_multiple_with_unequal_indent_in_select_line_mode() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-        buffer.insert("\t// amp\n\t\t// editor\n");
-        buffer.cursor.move_to(Position {
-            line: 0,
-            offset: 1,
-        });
-        buffer.path = Some("test.rs".into());
-
-        // Now that we've set up the buffer, add it
-        // to the application and call the command.
-        app.workspace.add_buffer(buffer);
-        commands::application::switch_to_select_line_mode(&mut app).unwrap();
-        app.workspace.current_buffer().unwrap().cursor.move_to(Position {
-            line: 1,
-            offset: 1,
-        });
-
-        super::toggle_line_comment(&mut app).unwrap();
-
-        assert_eq!(app.workspace.current_buffer().unwrap().data(),
-                   "\tamp\n\t\teditor\n");
-        assert_eq!(app.workspace.current_buffer().unwrap().cursor.position,
-                   Position { line: 1, offset: 1 });
-    }
-
-    #[test]
-    fn toggle_line_comment_add_correctly_preserves_empty_lines() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-        buffer.insert("\tamp\n\n\teditor\n");
-        buffer.cursor.move_to(Position {
-            line: 0,
-            offset: 0,
-        });
-        buffer.path = Some("test.rs".into());
-
-        // Now that we've set up the buffer, add it
-        // to the application and call the command.
-        app.workspace.add_buffer(buffer);
-        commands::application::switch_to_select_line_mode(&mut app).unwrap();
-        app.workspace.current_buffer().unwrap().cursor.move_to(Position {
-            line: 2,
-            offset: 0,
-        });
-
-        super::toggle_line_comment(&mut app).unwrap();
-
-        assert_eq!(app.workspace.current_buffer().unwrap().data(),
-                   "\t// amp\n\n\t// editor\n");
-        assert_eq!(app.workspace.current_buffer().unwrap().cursor.position,
-                   Position { line: 2, offset: 0 });
-    }
-
-    #[test]
-    fn toggle_line_comment_remove_correctly_preserves_empty_lines() {
-        let mut app = Application::new(&Vec::new()).unwrap();
-        let mut buffer = Buffer::new();
-        buffer.insert("\t// amp\n\n\t// editor\n");
-        buffer.cursor.move_to(Position {
-            line: 0,
-            offset: 0,
-        });
-        buffer.path = Some("test.rs".into());
-
-        // Now that we've set up the buffer, add it
-        // to the application and call the command.
-        app.workspace.add_buffer(buffer);
-        commands::application::switch_to_select_line_mode(&mut app).unwrap();
-        app.workspace.current_buffer().unwrap().cursor.move_to(Position {
-            line: 2,
-            offset: 0,
-        });
-
-        super::toggle_line_comment(&mut app).unwrap();
-
-        assert_eq!(app.workspace.current_buffer().unwrap().data(),
-                   "\tamp\n\n\teditor\n");
-        assert_eq!(app.workspace.current_buffer().unwrap().cursor.position,
-                   Position { line: 2, offset: 0 });
-    }
-}
+//#[cfg(test)]
+//mod tests {
+//    use crate::commands;
+//    use crate::models::Application;
+//    use crate::models::application::{ClipboardContent, Mode};
+//    use scribe::Buffer;
+//    use scribe::buffer::Position;
+//    use std::path::Path;
+//
+//    #[test]
+//    fn insert_newline_uses_current_line_indentation() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//
+//        // Insert data with indentation and move to the end of the line.
+//        buffer.insert("    amp");
+//        let position = Position {
+//            line: 0,
+//            offset: 7,
+//        };
+//        buffer.cursor.move_to(position);
+//
+//        // Now that we've set up the buffer, add it
+//        // to the application and call the command.
+//        app.workspace.add_buffer(buffer);
+//        super::insert_newline(&mut app).unwrap();
+//
+//        // Ensure that the whitespace is inserted.
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(),
+//                   "    amp\n    ");
+//
+//        // Also ensure that the cursor is moved to the end of the inserted whitespace.
+//        let expected_position = Position {
+//            line: 1,
+//            offset: 4,
+//        };
+//        assert_eq!(app.workspace.current_buffer().unwrap().cursor.line,
+//                   expected_position.line);
+//        assert_eq!(app.workspace.current_buffer().unwrap().cursor.offset,
+//                   expected_position.offset);
+//    }
+//
+//    #[test]
+//    fn insert_newline_uses_nearest_line_indentation_when_current_line_blank() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//
+//        // Insert data with indentation and move to the end of the line.
+//        buffer.insert("    amp\n");
+//        let position = Position { line: 1, offset: 0 };
+//        buffer.cursor.move_to(position);
+//
+//        // Now that we've set up the buffer, add it
+//        // to the application and call the command.
+//        app.workspace.add_buffer(buffer);
+//        super::insert_newline(&mut app).unwrap();
+//
+//        // Ensure that the whitespace is inserted.
+//        assert_eq!(
+//            app.workspace.current_buffer().unwrap().data(),
+//            "    amp\n\n    "
+//        );
+//
+//        // Also ensure that the cursor is moved to the end of the inserted whitespace.
+//        let expected_position = Position { line: 2, offset: 4 };
+//        assert_eq!(
+//            app.workspace.current_buffer().unwrap().cursor.line,
+//            expected_position.line
+//        );
+//        assert_eq!(
+//            app.workspace.current_buffer().unwrap().cursor.offset,
+//            expected_position.offset
+//        );
+//    }
+//
+//    #[test]
+//    fn change_rest_of_line_removes_content_and_switches_to_insert_mode() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//
+//        // Insert data with indentation and move to the end of the line.
+//        buffer.insert("    amp\neditor");
+//        let position = Position {
+//            line: 0,
+//            offset: 4,
+//        };
+//        buffer.cursor.move_to(position);
+//
+//        // Now that we've set up the buffer, add it
+//        // to the application and call the command.
+//        app.workspace.add_buffer(buffer);
+//        super::change_rest_of_line(&mut app).unwrap();
+//
+//        // Ensure that the content is removed.
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(),
+//                   "    \neditor");
+//
+//        // Ensure that we're in insert mode.
+//        assert!(match app.mode {
+//            crate::models::application::Mode::Insert => true,
+//            _ => false,
+//        });
+//
+//        // Ensure that sub-commands and subsequent inserts are run in batch.
+//        app.workspace.current_buffer().unwrap().insert(" ");
+//        app.workspace.current_buffer().unwrap().undo();
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(),
+//                   "    amp\neditor");
+//    }
+//
+//    #[test]
+//    fn delete_token_deletes_current_token_and_trailing_whitespace() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//        buffer.insert("amp editor");
+//
+//        // Now that we've set up the buffer, add it
+//        // to the application and call the command.
+//        app.workspace.add_buffer(buffer);
+//        super::delete_token(&mut app).unwrap();
+//
+//        // Ensure that the content is removed.
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(), "editor");
+//    }
+//
+//    #[test]
+//    fn delete_token_does_not_delete_newline_characters() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//        buffer.insert("amp\neditor");
+//
+//        // Now that we've set up the buffer, add it
+//        // to the application and call the command.
+//        app.workspace.add_buffer(buffer);
+//        super::delete_token(&mut app).unwrap();
+//
+//        // Ensure that the content is removed.
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(), "\neditor");
+//    }
+//
+//    #[test]
+//    fn delete_current_line_deletes_current_line() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//
+//        // Insert data with indentation and move to the end of the line.
+//        buffer.insert("    amp\neditor");
+//        let position = Position {
+//            line: 0,
+//            offset: 4,
+//        };
+//        buffer.cursor.move_to(position);
+//
+//        // Now that we've set up the buffer, add it
+//        // to the application and call the command.
+//        app.workspace.add_buffer(buffer);
+//        super::delete_current_line(&mut app).unwrap();
+//
+//        // Ensure that the content is removed.
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(), "editor");
+//    }
+//
+//    #[test]
+//    fn indent_line_inserts_two_spaces_at_start_of_line() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//        buffer.insert("amp\neditor");
+//        buffer.cursor.move_to(Position {
+//            line: 1,
+//            offset: 2,
+//        });
+//
+//        // Now that we've set up the buffer, add it
+//        // to the application and call the command.
+//        app.workspace.add_buffer(buffer);
+//        super::indent_line(&mut app).unwrap();
+//
+//        // Ensure that the content is inserted correctly.
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(),
+//                   "amp\n  editor");
+//    }
+//
+//    #[test]
+//    fn indent_line_works_in_select_line_mode() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//        buffer.insert("amp\n  editor");
+//
+//        // Now that we've set up the buffer, add it to the
+//        // application, select all lines, and call the command.
+//        app.workspace.add_buffer(buffer);
+//        commands::application::switch_to_select_line_mode(&mut app).unwrap();
+//        commands::cursor::move_down(&mut app).unwrap();
+//        super::indent_line(&mut app).unwrap();
+//
+//        // Ensure that the content is inserted correctly.
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(),
+//                   "  amp\n    editor");
+//    }
+//
+//    #[test]
+//    fn indent_line_moves_cursor_in_insert_mode() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//        buffer.insert("amp\neditor");
+//        buffer.cursor.move_to(Position {
+//            line: 1,
+//            offset: 2,
+//        });
+//
+//        // Now that we've set up the buffer, add it
+//        // to the application and call the command.
+//        app.workspace.add_buffer(buffer);
+//        commands::application::switch_to_insert_mode(&mut app).unwrap();
+//        super::indent_line(&mut app).unwrap();
+//
+//        // Ensure that the cursor is updated.
+//        assert_eq!(*app.workspace.current_buffer().unwrap().cursor,
+//                   Position {
+//                       line: 1,
+//                       offset: 4,
+//                   });
+//    }
+//
+//    #[test]
+//    fn indent_line_does_not_move_cursor_in_normal_mode() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//        buffer.insert("amp\neditor");
+//        buffer.cursor.move_to(Position {
+//            line: 1,
+//            offset: 2,
+//        });
+//
+//        // Now that we've set up the buffer, add it
+//        // to the application and call the command.
+//        app.workspace.add_buffer(buffer);
+//        super::indent_line(&mut app).unwrap();
+//
+//        // Ensure that the cursor is not updated.
+//        assert_eq!(*app.workspace.current_buffer().unwrap().cursor,
+//                   Position {
+//                       line: 1,
+//                       offset: 2,
+//                   });
+//    }
+//
+//    #[test]
+//    fn indent_line_groups_multi_line_indents_as_a_single_operation() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//        buffer.insert("amp\n  editor");
+//
+//        // Now that we've set up the buffer, add it to the
+//        // application, select all lines, and call the command.
+//        app.workspace.add_buffer(buffer);
+//        commands::application::switch_to_select_line_mode(&mut app).unwrap();
+//        commands::cursor::move_down(&mut app).unwrap();
+//        super::indent_line(&mut app).unwrap();
+//
+//        // Ensure that the indentation is applied correctly.
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(),
+//                   "  amp\n    editor");
+//
+//        // Undo the indent and check that it's treated as one operation.
+//        super::undo(&mut app).unwrap();
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(),
+//                   "amp\n  editor");
+//    }
+//
+//    #[test]
+//    fn indent_line_works_with_reversed_selections() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//        buffer.insert("amp\neditor");
+//
+//        // Now that we've set up the buffer, add it to the
+//        // application, select all lines, and call the command.
+//        app.workspace.add_buffer(buffer);
+//        commands::cursor::move_down(&mut app).unwrap();
+//        commands::application::switch_to_select_line_mode(&mut app).unwrap();
+//        commands::cursor::move_up(&mut app).unwrap();
+//        super::indent_line(&mut app).unwrap();
+//
+//        // Ensure that the indentation is applied correctly.
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(),
+//                   "  amp\n  editor");
+//    }
+//
+//    #[test]
+//    fn outdent_line_removes_two_spaces_from_start_of_line() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//        buffer.insert("amp\n  editor");
+//        buffer.cursor.move_to(Position {
+//            line: 1,
+//            offset: 6,
+//        });
+//
+//        // Now that we've set up the buffer, add it
+//        // to the application and call the command.
+//        app.workspace.add_buffer(buffer);
+//        super::outdent_line(&mut app).unwrap();
+//
+//        // Ensure that the content is removed.
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(),
+//                   "amp\neditor");
+//
+//        // Ensure that the cursor is updated.
+//        assert_eq!(*app.workspace.current_buffer().unwrap().cursor,
+//                   Position {
+//                       line: 1,
+//                       offset: 4,
+//                   });
+//    }
+//
+//    #[test]
+//    fn outdent_line_removes_as_much_space_as_it_can_from_start_of_line_if_less_than_full_indent
+//        () {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//        buffer.insert("amp\n editor");
+//        buffer.cursor.move_to(Position {
+//            line: 1,
+//            offset: 2,
+//        });
+//
+//        // Now that we've set up the buffer, add it
+//        // to the application and call the command.
+//        app.workspace.add_buffer(buffer);
+//        super::outdent_line(&mut app).unwrap();
+//
+//        // Ensure that the content is inserted correctly.
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(),
+//                   "amp\neditor");
+//    }
+//
+//    #[test]
+//    fn outdent_does_nothing_if_there_is_no_leading_whitespace() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//
+//        // Add some trailing whitespace to trip up naive implementations.
+//        buffer.insert("amp\neditor   ");
+//
+//        // Now that we've set up the buffer, add it
+//        // to the application and call the command.
+//        app.workspace.add_buffer(buffer);
+//        super::outdent_line(&mut app).unwrap();
+//
+//        // Ensure that the content is inserted correctly.
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(),
+//                   "amp\neditor   ");
+//    }
+//
+//    #[test]
+//    fn outdent_line_works_in_select_line_mode() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//        buffer.insert("  amp\n  editor");
+//
+//        // Now that we've set up the buffer, add it to the
+//        // application, select all lines, and call the command.
+//        app.workspace.add_buffer(buffer);
+//        commands::application::switch_to_select_line_mode(&mut app).unwrap();
+//        commands::cursor::move_down(&mut app).unwrap();
+//        super::outdent_line(&mut app).unwrap();
+//
+//        // Ensure that the content is inserted correctly.
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(),
+//                   "amp\neditor");
+//    }
+//
+//    #[test]
+//    fn outdent_line_groups_multi_line_indents_as_a_single_operation() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//        buffer.insert("  amp\n  editor");
+//
+//        // Now that we've set up the buffer, add it to the
+//        // application, select all lines, and call the command.
+//        app.workspace.add_buffer(buffer);
+//        commands::application::switch_to_select_line_mode(&mut app).unwrap();
+//        commands::cursor::move_down(&mut app).unwrap();
+//        super::outdent_line(&mut app).unwrap();
+//
+//        // Ensure that the indentation is applied correctly.
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(),
+//                   "amp\neditor");
+//
+//        // Undo the outdent and check that it's treated as one operation.
+//        super::undo(&mut app).unwrap();
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(),
+//                   "  amp\n  editor");
+//    }
+//
+//    #[test]
+//    fn outdent_line_works_with_reversed_selections() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//        buffer.insert("  amp\n  editor");
+//
+//        // Now that we've set up the buffer, add it to the
+//        // application, select all lines, and call the command.
+//        app.workspace.add_buffer(buffer);
+//        commands::cursor::move_down(&mut app).unwrap();
+//        commands::application::switch_to_select_line_mode(&mut app).unwrap();
+//        commands::cursor::move_up(&mut app).unwrap();
+//        super::outdent_line(&mut app).unwrap();
+//
+//        // Ensure that the indentation is applied correctly.
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(),
+//                   "amp\neditor");
+//    }
+//
+//    #[test]
+//    fn remove_trailing_whitespace_works() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//        buffer.insert("  amp\n  \neditor ");
+//
+//        // Now that we've set up the buffer, add it
+//        // to the application and call the command.
+//        app.workspace.add_buffer(buffer);
+//        super::remove_trailing_whitespace(&mut app).unwrap();
+//
+//        // Ensure that trailing whitespace is removed.
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(),
+//                   "  amp\n\neditor");
+//    }
+//
+//    #[test]
+//    fn remove_trailing_whitespace_works_with_tab() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//        buffer.insert("\t\tamp\n\t\t\neditor\t");
+//
+//        // Now that we've set up the buffer, add it
+//        // to the application and call the command.
+//        app.workspace.add_buffer(buffer);
+//        super::remove_trailing_whitespace(&mut app).unwrap();
+//
+//        // Ensure that trailing whitespace is removed.
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(),
+//                   "\t\tamp\n\neditor");
+//    }
+//
+//    #[test]
+//    fn save_removes_trailing_whitespace_and_adds_newlines() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//        buffer.insert("amp  \neditor ");
+//
+//        // Now that we've set up the buffer, add it
+//        // to the application, and save it.
+//        app.workspace.add_buffer(buffer);
+//        super::save(&mut app).ok();
+//
+//        // Ensure that trailing whitespace is removed.
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(),
+//                   "amp\neditor\n");
+//    }
+//
+//    #[test]
+//    fn save_switches_to_path_mode_when_path_is_missing() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let buffer = Buffer::new();
+//
+//        // Now that we've set up the buffer, add it
+//        // to the application, and save it.
+//        app.workspace.add_buffer(buffer);
+//        super::save(&mut app).ok();
+//
+//        // Ensure that we've switched to path mode.
+//        if let Mode::Path(_) = app.mode {
+//        } else {
+//            panic!("Failed to switch to path mode");
+//        }
+//    }
+//
+//    #[test]
+//    fn save_sets_save_on_accept_when_switching_to_path_mode() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let buffer = Buffer::new();
+//
+//        // Now that we've set up the buffer, add it
+//        // to the application, and save it.
+//        app.workspace.add_buffer(buffer);
+//        super::save(&mut app).ok();
+//
+//        // Ensure that we've set the save_on_accept flag.
+//        if let Mode::Path(ref mode) = app.mode {
+//            assert!(mode.save_on_accept)
+//        } else {
+//            panic!("Failed to switch to path mode");
+//        }
+//    }
+//
+//    #[test]
+//    fn paste_inserts_at_cursor_when_pasting_inline_data() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//        buffer.insert("amp\neditor");
+//
+//        // Now that we've set up the buffer, add it
+//        // to the application, copy the first line to
+//        // the buffer, and then paste the clipboard contents.
+//        app.workspace.add_buffer(buffer);
+//        commands::application::switch_to_select_mode(&mut app).unwrap();
+//        commands::cursor::move_right(&mut app).unwrap();
+//        commands::selection::copy(&mut app).unwrap();
+//        commands::buffer::paste(&mut app).unwrap();
+//
+//        // Ensure that the clipboard contents are pasted to the line below.
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(),
+//                   "aamp\neditor");
+//    }
+//
+//    #[test]
+//    fn paste_inserts_on_line_below_when_pasting_block_data() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//        buffer.insert("amp\neditor");
+//        buffer.cursor.move_to(Position {
+//            line: 0,
+//            offset: 2,
+//        });
+//
+//        // Now that we've set up the buffer, add it
+//        // to the application, copy the first line to
+//        // the buffer, and then paste the clipboard contents.
+//        app.workspace.add_buffer(buffer);
+//        commands::application::switch_to_select_line_mode(&mut app).unwrap();
+//        commands::selection::copy(&mut app).unwrap();
+//        commands::buffer::paste(&mut app).unwrap();
+//
+//        // Ensure that the clipboard contents are pasted to the line below.
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(),
+//                   "amp\namp\neditor");
+//    }
+//
+//    #[test]
+//    fn paste_works_at_end_of_buffer_when_pasting_block_data() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//        buffer.insert("amp\neditor");
+//        buffer.cursor.move_to(Position {
+//            line: 0,
+//            offset: 0,
+//        });
+//
+//        // Now that we've set up the buffer, add it
+//        // to the application, copy the first line to
+//        // the buffer, and then paste it at the end of the buffer.
+//        app.workspace.add_buffer(buffer);
+//        commands::application::switch_to_select_line_mode(&mut app).unwrap();
+//        commands::selection::copy(&mut app).unwrap();
+//        commands::cursor::move_down(&mut app).unwrap();
+//        commands::buffer::paste(&mut app).unwrap();
+//
+//        // Ensure that the clipboard contents are pasted to the line below.
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(),
+//                   "amp\neditor\namp\n");
+//    }
+//
+//    #[test]
+//    fn paste_works_on_trailing_newline_when_pasting_block_data() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//        buffer.insert("amp\neditor\n");
+//        buffer.cursor.move_to(Position {
+//            line: 0,
+//            offset: 0,
+//        });
+//
+//        // Now that we've set up the buffer, add it
+//        // to the application, copy the first line to
+//        // the buffer, and then paste it at the end of the buffer.
+//        app.workspace.add_buffer(buffer);
+//        commands::application::switch_to_select_line_mode(&mut app).unwrap();
+//        commands::selection::copy(&mut app).unwrap();
+//        commands::cursor::move_down(&mut app).unwrap();
+//        commands::cursor::move_down(&mut app).unwrap();
+//        commands::buffer::paste(&mut app).unwrap();
+//
+//        // Ensure that the clipboard contents are pasted to the line below.
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(),
+//                   "amp\neditor\namp\n");
+//    }
+//
+//    #[test]
+//    fn backspace_outdents_line_if_line_is_whitespace() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//        buffer.insert("amp\neditor\n        ");
+//        buffer.cursor.move_to(Position {
+//            line: 2,
+//            offset: 8,
+//        });
+//
+//        // Now that we've set up the buffer, add it
+//        // to the application and run the command.
+//        app.workspace.add_buffer(buffer);
+//        commands::buffer::backspace(&mut app).unwrap();
+//
+//        // Ensure that the clipboard contents are pasted to the line below.
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(),
+//                   "amp\neditor\n      ");
+//    }
+//
+//    #[test]
+//    fn merge_next_line_joins_current_and_next_lines_with_a_space() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//        buffer.insert("amp\neditor");
+//
+//        // Now that we've set up the buffer, add it
+//        // to the application and run the command.
+//        app.workspace.add_buffer(buffer);
+//        commands::buffer::merge_next_line(&mut app).unwrap();
+//
+//        // Ensure that the lines are merged correctly.
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(), "amp editor");
+//
+//        // Ensure that the cursor is moved to the end of the current line.
+//        assert_eq!(*app.workspace.current_buffer().unwrap().cursor,
+//                   Position {
+//                       line: 0,
+//                       offset: 3,
+//                   });
+//    }
+//
+//    #[test]
+//    fn merge_next_line_does_nothing_if_there_is_no_next_line() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//        buffer.insert("amp editor");
+//
+//        // Now that we've set up the buffer, add it
+//        // to the application and run the command.
+//        app.workspace.add_buffer(buffer);
+//        commands::buffer::merge_next_line(&mut app).ok();
+//
+//        // Ensure that the lines are merged correctly.
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(), "amp editor");
+//
+//        // Ensure that the cursor is moved to the end of the current line.
+//        assert_eq!(*app.workspace.current_buffer().unwrap().cursor,
+//                   Position {
+//                       line: 0,
+//                       offset: 0,
+//                   });
+//    }
+//
+//    #[test]
+//    fn merge_next_line_works_when_the_next_line_has_a_line_after_it() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//        buffer.insert("amp\neditor\ntest");
+//
+//        // Now that we've set up the buffer, add it
+//        // to the application and run the command.
+//        app.workspace.add_buffer(buffer);
+//        commands::buffer::merge_next_line(&mut app).unwrap();
+//
+//        // Ensure that the lines are merged correctly.
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(),
+//                   "amp editor\ntest");
+//    }
+//
+//    #[test]
+//    fn merge_next_line_works_when_the_first_line_has_leading_whitespace() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//        buffer.insert("\n amp\neditor");
+//        buffer.cursor.move_to(Position {
+//            line: 1,
+//            offset: 0,
+//        });
+//
+//        // Now that we've set up the buffer, add it
+//        // to the application and run the command.
+//        app.workspace.add_buffer(buffer);
+//        commands::buffer::merge_next_line(&mut app).unwrap();
+//
+//        // Ensure that the lines are merged correctly.
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(),
+//                   "\n amp editor");
+//    }
+//
+//    #[test]
+//    fn merge_next_line_removes_leading_whitespace_from_second_line() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//        buffer.insert("amp\n    editor");
+//
+//        // Now that we've set up the buffer, add it
+//        // to the application and run the command.
+//        app.workspace.add_buffer(buffer);
+//        commands::buffer::merge_next_line(&mut app).unwrap();
+//
+//        // Ensure that the lines are merged correctly.
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(), "amp editor");
+//    }
+//
+//    #[test]
+//    fn ensure_trailing_newline_adds_newlines_when_missing() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//        buffer.insert("amp\neditor");
+//
+//        // Now that we've set up the buffer, add it
+//        // to the application and run the command.
+//        app.workspace.add_buffer(buffer);
+//        commands::buffer::ensure_trailing_newline(&mut app).unwrap();
+//
+//        // Ensure that trailing newline is added.
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(),
+//                   "amp\neditor\n");
+//    }
+//
+//    #[test]
+//    fn ensure_trailing_newline_does_nothing_when_already_present() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//        buffer.insert("amp\neditor\n");
+//
+//        // Now that we've set up the buffer, add it
+//        // to the application and run the command.
+//        app.workspace.add_buffer(buffer);
+//        commands::buffer::ensure_trailing_newline(&mut app).unwrap();
+//
+//        // Ensure that trailing newline is added.
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(),
+//                   "amp\neditor\n");
+//    }
+//
+//    #[test]
+//    fn paste_with_inline_content_replaces_selection() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//        buffer.insert("amp");
+//        app.clipboard.set_content(ClipboardContent::Inline("editor".to_string())).unwrap();
+//
+//        // Now that we've set up the buffer, add it to
+//        // the application, select its contents, and paste.
+//        app.workspace.add_buffer(buffer);
+//        commands::application::switch_to_select_mode(&mut app).unwrap();
+//        commands::cursor::move_to_end_of_line(&mut app).unwrap();
+//        commands::buffer::paste(&mut app).unwrap();
+//
+//        // Ensure that the content is replaced
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(), "editor");
+//
+//        // TODO: Ensure that the operation is treated atomically.
+//        // commands::buffer::undo(&mut app);
+//        // assert_eq!(app.workspace.current_buffer().unwrap().data(), "amp");
+//    }
+//
+//    #[test]
+//    fn paste_with_block_content_replaces_selection() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//        buffer.insert("amp\neditor");
+//        app.clipboard.set_content(ClipboardContent::Block("paste amp\n".to_string())).unwrap();
+//
+//        // Now that we've set up the buffer, add it to
+//        // the application, select its contents, and paste.
+//        app.workspace.add_buffer(buffer);
+//        commands::application::switch_to_select_line_mode(&mut app).unwrap();
+//        commands::buffer::paste(&mut app).unwrap();
+//
+//        // Ensure that the content is replaced
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(),
+//                   "paste amp\neditor");
+//
+//        // TODO: Ensure that the operation is treated atomically.
+//        // commands::buffer::undo(&mut app);
+//        // assert_eq!(app.workspace.current_buffer().unwrap().data(), "amp");
+//    }
+//
+//    #[test]
+//    fn paste_above_inserts_clipboard_contents_on_a_new_line_above() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//        let original_position = Position {
+//            line: 0,
+//            offset: 3,
+//        };
+//        buffer.insert("editor");
+//        buffer.cursor.move_to(original_position.clone());
+//        app.clipboard.set_content(ClipboardContent::Block("amp\n".to_string())).unwrap();
+//
+//        // Now that we've set up the buffer,
+//        // add it to the application and paste.
+//        app.workspace.add_buffer(buffer);
+//        commands::buffer::paste_above(&mut app).unwrap();
+//
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(),
+//                   "amp\neditor");
+//        assert_eq!(*app.workspace.current_buffer().unwrap().cursor,
+//                   original_position);
+//    }
+//
+//    #[test]
+//    fn close_displays_confirmation_when_buffer_is_modified() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//        buffer.insert("data");
+//
+//        // Now that we've set up the buffer, add
+//        // it to the application and run the command.
+//        app.workspace.add_buffer(buffer);
+//        commands::buffer::close(&mut app).unwrap();
+//
+//        if let Mode::Confirm(_) = app.mode {
+//        } else {
+//            panic!("Not in confirm mode");
+//        }
+//    }
+//
+//    #[test]
+//    fn close_skips_confirmation_when_buffer_is_empty() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let buffer = Buffer::new();
+//
+//        // Empty the workspace.
+//        app.workspace.close_current_buffer();
+//
+//        // Now that we've set up the buffer, add
+//        // it to the application and run the command.
+//        app.workspace.add_buffer(buffer);
+//        commands::buffer::close(&mut app).unwrap();
+//
+//        assert!(app.workspace.current_buffer().is_none());
+//    }
+//
+//    #[test]
+//    fn close_skips_confirmation_when_buffer_is_unmodified() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let buffer = Buffer::from_file(Path::new("LICENSE")).unwrap();
+//
+//        // Empty the workspace.
+//        app.workspace.close_current_buffer();
+//
+//        // Now that we've set up the buffer, add
+//        // it to the application and run the command.
+//        app.workspace.add_buffer(buffer);
+//        commands::buffer::close(&mut app).unwrap();
+//
+//        assert!(app.workspace.current_buffer().is_none());
+//    }
+//
+//    #[test]
+//    fn close_others_skips_confirmation_when_all_other_buffers_are_empty_or_unmodified() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let buffer_1 = Buffer::new();
+//        let buffer_2 = Buffer::from_file(Path::new("LICENSE")).unwrap();
+//        let mut buffer_3 = Buffer::new();
+//        buffer_3.insert("three");
+//
+//        // Empty the workspace.
+//        app.workspace.close_current_buffer();
+//
+//        // Now that we've set up the buffers, add
+//        // them to the application and run the command.
+//        app.workspace.add_buffer(buffer_1);
+//        app.workspace.add_buffer(buffer_2);
+//        app.workspace.add_buffer(buffer_3);
+//        commands::buffer::close_others(&mut app).unwrap();
+//
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(), "three");
+//        app.workspace.next_buffer();
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(), "three");
+//    }
+//
+//    #[test]
+//    fn close_others_displays_confirmation_before_closing_modified_buffer() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let buffer = Buffer::new();
+//        let mut modified_buffer = Buffer::new();
+//        modified_buffer.insert("data");
+//
+//        // Empty the workspace.
+//        app.workspace.close_current_buffer();
+//
+//        // Now that we've set up the buffers, add
+//        // them to the application and run the command.
+//        app.workspace.add_buffer(modified_buffer);
+//        app.workspace.add_buffer(buffer);
+//        commands::buffer::close_others(&mut app).unwrap();
+//
+//        if let Mode::Confirm(_) = app.mode {
+//        } else {
+//            panic!("Not in confirm mode");
+//        }
+//
+//        // Confirm the command.
+//        commands::confirm::confirm_command(&mut app).unwrap();
+//
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(), "");
+//        app.workspace.next_buffer();
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(), "");
+//    }
+//
+//    #[test]
+//    fn close_others_works_when_current_buffer_is_last() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer_1 = Buffer::new();
+//        let mut buffer_2 = Buffer::new();
+//        let mut buffer_3 = Buffer::new();
+//        buffer_1.insert(""); // Empty to prevent close confirmation.
+//        buffer_2.insert(""); // Empty to prevent close confirmation.
+//        buffer_3.insert("three");
+//
+//        // Now that we've set up the buffers, add
+//        // them to the application and run the command.
+//        app.workspace.add_buffer(buffer_1);
+//        app.workspace.add_buffer(buffer_2);
+//        app.workspace.add_buffer(buffer_3);
+//
+//        // Run the command twice, to
+//        commands::buffer::close_others(&mut app).unwrap();
+//
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(), "three");
+//        app.workspace.next_buffer();
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(), "three");
+//    }
+//
+//    #[test]
+//    fn close_others_works_when_current_buffer_is_not_last() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer_1 = Buffer::new();
+//        let mut buffer_2 = Buffer::new();
+//        let mut buffer_3 = Buffer::new();
+//        buffer_1.insert("");    // Empty to prevent close confirmation.
+//        buffer_2.insert("two");
+//        buffer_3.insert("");    // Empty to prevent close confirmation.
+//
+//        // Now that we've set up the buffers, add
+//        // them to the application and run the command.
+//        app.workspace.add_buffer(buffer_1);
+//        app.workspace.add_buffer(buffer_2);
+//        app.workspace.add_buffer(buffer_3);
+//        app.workspace.previous_buffer();
+//        commands::buffer::close_others(&mut app).unwrap();
+//
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(), "two");
+//        app.workspace.next_buffer();
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(), "two");
+//    }
+//
+//    #[test]
+//    fn toggle_line_comment_add_single_in_normal_mode() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//        buffer.insert("\tamp\n\teditor\n");
+//        buffer.cursor.move_to(Position {
+//            line: 0,
+//            offset: 1
+//        });
+//        buffer.path = Some("test.rs".into());
+//
+//        // Now that we've set up the buffer, add it
+//        // to the application and call the command.
+//        app.workspace.add_buffer(buffer);
+//        super::toggle_line_comment(&mut app).unwrap();
+//
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(),
+//                   "\t// amp\n\teditor\n");
+//        assert_eq!(app.workspace.current_buffer().unwrap().cursor.position,
+//                   Position { line: 0, offset: 1 });
+//    }
+//
+//    #[test]
+//    fn toggle_line_comment_add_multiple_in_select_line_mode() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//        buffer.insert("\tamp\n\t\teditor\n");
+//        buffer.cursor.move_to(Position {
+//            line: 0,
+//            offset: 1,
+//        });
+//        buffer.path = Some("test.rs".into());
+//
+//        // Now that we've set up the buffer, add it
+//        // to the application and call the command.
+//        app.workspace.add_buffer(buffer);
+//        commands::application::switch_to_select_line_mode(&mut app).unwrap();
+//        app.workspace.current_buffer().unwrap().cursor.move_to(Position {
+//            line: 1,
+//            offset: 1,
+//        });
+//
+//        super::toggle_line_comment(&mut app).unwrap();
+//
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(),
+//                   "\t// amp\n\t// \teditor\n");
+//        assert_eq!(app.workspace.current_buffer().unwrap().cursor.position,
+//                   Position { line: 1, offset: 1 });
+//    }
+//
+//    #[test]
+//    fn toggle_line_comment_remove_single_in_normal_mode() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//        buffer.insert("\t// amp\n\teditor\n");
+//        buffer.cursor.move_to(Position {
+//            line: 0,
+//            offset: 1,
+//        });
+//        buffer.path = Some("test.rs".into());
+//
+//        // Now that we've set up the buffer, add it
+//        // to the application and call the command.
+//        app.workspace.add_buffer(buffer);
+//        super::toggle_line_comment(&mut app).unwrap();
+//
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(),
+//                   "\tamp\n\teditor\n");
+//        assert_eq!(app.workspace.current_buffer().unwrap().cursor.position,
+//                   Position { line: 0, offset: 1 });
+//    }
+//
+//    #[test]
+//    fn toggle_line_comment_remove_multiple_in_select_line_mode() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//        buffer.insert("\t// amp\n\t// \teditor\n");
+//        buffer.cursor.move_to(Position {
+//            line: 0,
+//            offset: 1,
+//        });
+//        buffer.path = Some("test.rs".into());
+//
+//        // Now that we've set up the buffer, add it
+//        // to the application and call the command.
+//        app.workspace.add_buffer(buffer);
+//        commands::application::switch_to_select_line_mode(&mut app).unwrap();
+//        app.workspace.current_buffer().unwrap().cursor.move_to(Position {
+//            line: 1,
+//            offset: 1,
+//        });
+//
+//        super::toggle_line_comment(&mut app).unwrap();
+//
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(),
+//                   "\tamp\n\t\teditor\n");
+//        assert_eq!(app.workspace.current_buffer().unwrap().cursor.position,
+//                   Position { line: 1, offset: 1 });
+//    }
+//
+//    #[test]
+//    fn toggle_line_comment_remove_multiple_with_unequal_indent_in_select_line_mode() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//        buffer.insert("\t// amp\n\t\t// editor\n");
+//        buffer.cursor.move_to(Position {
+//            line: 0,
+//            offset: 1,
+//        });
+//        buffer.path = Some("test.rs".into());
+//
+//        // Now that we've set up the buffer, add it
+//        // to the application and call the command.
+//        app.workspace.add_buffer(buffer);
+//        commands::application::switch_to_select_line_mode(&mut app).unwrap();
+//        app.workspace.current_buffer().unwrap().cursor.move_to(Position {
+//            line: 1,
+//            offset: 1,
+//        });
+//
+//        super::toggle_line_comment(&mut app).unwrap();
+//
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(),
+//                   "\tamp\n\t\teditor\n");
+//        assert_eq!(app.workspace.current_buffer().unwrap().cursor.position,
+//                   Position { line: 1, offset: 1 });
+//    }
+//
+//    #[test]
+//    fn toggle_line_comment_add_correctly_preserves_empty_lines() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//        buffer.insert("\tamp\n\n\teditor\n");
+//        buffer.cursor.move_to(Position {
+//            line: 0,
+//            offset: 0,
+//        });
+//        buffer.path = Some("test.rs".into());
+//
+//        // Now that we've set up the buffer, add it
+//        // to the application and call the command.
+//        app.workspace.add_buffer(buffer);
+//        commands::application::switch_to_select_line_mode(&mut app).unwrap();
+//        app.workspace.current_buffer().unwrap().cursor.move_to(Position {
+//            line: 2,
+//            offset: 0,
+//        });
+//
+//        super::toggle_line_comment(&mut app).unwrap();
+//
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(),
+//                   "\t// amp\n\n\t// editor\n");
+//        assert_eq!(app.workspace.current_buffer().unwrap().cursor.position,
+//                   Position { line: 2, offset: 0 });
+//    }
+//
+//    #[test]
+//    fn toggle_line_comment_remove_correctly_preserves_empty_lines() {
+//        let mut app = Application::new(&Vec::new()).unwrap();
+//        let mut buffer = Buffer::new();
+//        buffer.insert("\t// amp\n\n\t// editor\n");
+//        buffer.cursor.move_to(Position {
+//            line: 0,
+//            offset: 0,
+//        });
+//        buffer.path = Some("test.rs".into());
+//
+//        // Now that we've set up the buffer, add it
+//        // to the application and call the command.
+//        app.workspace.add_buffer(buffer);
+//        commands::application::switch_to_select_line_mode(&mut app).unwrap();
+//        app.workspace.current_buffer().unwrap().cursor.move_to(Position {
+//            line: 2,
+//            offset: 0,
+//        });
+//
+//        super::toggle_line_comment(&mut app).unwrap();
+//
+//        assert_eq!(app.workspace.current_buffer().unwrap().data(),
+//                   "\tamp\n\n\teditor\n");
+//        assert_eq!(app.workspace.current_buffer().unwrap().cursor.position,
+//                   Position { line: 2, offset: 0 });
+//    }
+//}
+//

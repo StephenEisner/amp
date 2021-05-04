@@ -21,27 +21,11 @@ use std::path::Path;
 use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use crate::view::View;
-
-pub enum Mode {
-    Confirm(ConfirmMode),
-    Command(CommandMode),
-    Exit,
-    Insert,
-    Jump(JumpMode),
-    LineJump(LineJumpMode),
-    Path(PathMode),
-    Normal,
-    Open(OpenMode),
-    Select(SelectMode),
-    SelectLine(SelectLineMode),
-    Search(SearchMode),
-    SymbolJump(SymbolJumpMode),
-    Syntax(SyntaxMode),
-    Theme(ThemeMode),
-}
+use crate::models::application::modes::{Mode, NormalMode, SearchSelectMode};
+use std::collections::LinkedList;
 
 pub struct Application {
-    pub mode: Mode,
+    pub mode_stack: LinkedList<Box<dyn Mode + 'static>>,
     pub workspace: Workspace,
     pub search_query: Option<String>,
     pub view: View,
@@ -54,6 +38,7 @@ pub struct Application {
 }
 
 impl Application {
+
     pub fn new(args: &Vec<String>) -> Result<Application> {
         let preferences = initialize_preferences();
 
@@ -63,9 +48,11 @@ impl Application {
 
         // Set up a workspace in the current directory.
         let workspace = create_workspace(&mut view, &preferences.borrow(), args)?;
+        let mut stack: LinkedList<Box<(dyn Mode +'static)>> = LinkedList::new();
+        stack.push_front(Box::new(NormalMode::new()));
 
         Ok(Application {
-            mode: Mode::Normal,
+            mode_stack: stack,
             workspace,
             search_query: None,
             view,
@@ -83,7 +70,7 @@ impl Application {
             self.render();
             self.wait_for_event()?;
 
-            if let Mode::Exit = self.mode {
+            if self.mode_stack.is_empty() {
                 break;
             }
         }
@@ -92,61 +79,16 @@ impl Application {
     }
 
     fn render(&mut self) {
-        if let Err(error) = self.present() {
+        let mut mode = self.mode_stack.pop_front().unwrap();
+        if let Err(error) = mode.present(self) {
             presenters::error::display(&mut self.workspace, &mut self.view, &error);
         } else if let Some(ref error) = self.error {
             // Display an error from previous command invocation, if one exists.
             presenters::error::display(&mut self.workspace, &mut self.view, error);
         }
+        self.mode_stack.push_front(mode);
     }
 
-    fn present(&mut self) -> Result<()> {
-        match self.mode {
-            Mode::Confirm(_) => {
-                presenters::modes::confirm::display(&mut self.workspace, &mut self.view)
-            }
-            Mode::Command(ref mut mode) => {
-                presenters::modes::search_select::display(&mut self.workspace, mode, &mut self.view)
-            }
-            Mode::Insert => presenters::modes::insert::display(&mut self.workspace, &mut self.view),
-            Mode::Open(ref mut mode) => {
-                presenters::modes::search_select::display(&mut self.workspace, mode, &mut self.view)
-            }
-            Mode::Search(ref mode) => {
-                presenters::modes::search::display(&mut self.workspace, mode, &mut self.view)
-            }
-            Mode::Jump(ref mut mode) => {
-                presenters::modes::jump::display(&mut self.workspace, mode, &mut self.view)
-            }
-            Mode::LineJump(ref mode) => {
-                presenters::modes::line_jump::display(&mut self.workspace, mode, &mut self.view)
-            }
-            Mode::Path(ref mode) => {
-                presenters::modes::path::display(&mut self.workspace, mode, &mut self.view)
-            }
-            Mode::SymbolJump(ref mut mode) => {
-                presenters::modes::search_select::display(&mut self.workspace, mode, &mut self.view)
-            }
-            Mode::Syntax(ref mut mode) => {
-                presenters::modes::search_select::display(&mut self.workspace, mode, &mut self.view)
-            }
-            Mode::Select(ref mode) => {
-                presenters::modes::select::display(&mut self.workspace, mode, &mut self.view)
-            }
-            Mode::SelectLine(ref mode) => {
-                presenters::modes::select_line::display(&mut self.workspace, mode, &mut self.view)
-            }
-            Mode::Normal => presenters::modes::normal::display(
-                &mut self.workspace,
-                &mut self.view,
-                &self.repository,
-            ),
-            Mode::Theme(ref mut mode) => {
-                presenters::modes::search_select::display(&mut self.workspace, mode, &mut self.view)
-            }
-            Mode::Exit => Ok(()),
-        }
-    }
 
     fn wait_for_event(&mut self) -> Result<()> {
         let event = self
@@ -160,7 +102,8 @@ impl Application {
             }
             Event::Resize => {}
             Event::OpenModeIndexComplete(index) => {
-                if let Mode::Open(ref mut open_mode) = self.mode {
+                if self.mode_id() == Some("open") {
+                    let open_mode = self.unwrap_mode_mutable::<OpenMode>().unwrap();
                     open_mode.set_index(index);
 
                     // Trigger a search, in case a query was
@@ -173,49 +116,46 @@ impl Application {
         Ok(())
     }
 
-    pub fn mode_str(&self) -> Option<&'static str> {
-        match self.mode {
-            Mode::Command(ref mode) => if mode.insert_mode() {
-                Some("search_select_insert")
-            } else {
-                Some("search_select")
-            },
-            Mode::SymbolJump(ref mode) => if mode.insert_mode() {
-                Some("search_select_insert")
-            } else {
-                Some("search_select")
-            },
-            Mode::Open(ref mode) => if mode.insert_mode() {
-                Some("search_select_insert")
-            } else {
-                Some("search_select")
-            },
-            Mode::Theme(ref mode) => if mode.insert_mode() {
-                Some("search_select_insert")
-            } else {
-                Some("search_select")
-            },
-            Mode::Syntax(ref mode) => if mode.insert_mode() {
-                Some("search_select_insert")
-            } else {
-                Some("search_select")
-            },
-            Mode::Normal => Some("normal"),
-            Mode::Path(_) => Some("path"),
-            Mode::Confirm(_) => Some("confirm"),
-            Mode::Insert => Some("insert"),
-            Mode::Jump(_) => Some("jump"),
-            Mode::LineJump(_) => Some("line_jump"),
-            Mode::Select(_) => Some("select"),
-            Mode::SelectLine(_) => Some("select_line"),
-            Mode::Search(ref mode) => if mode.insert_mode() {
-                Some("search_insert")
-            } else {
-                Some("search")
-            },
-            Mode::Exit => None,
-        }
+    pub fn unwrap_mode<T: Mode>(&self) -> Option<&T>{
+        self.mode_stack.front().unwrap().as_any().downcast_ref::<T>()
     }
+
+    //get rid of mut for this and mode_id and mode_str
+    fn curr_mode(&self) -> Option<&Box<dyn Mode>>{
+        self.mode_stack.front()
+    }
+
+    pub fn unwrap_mode_mutable<T: Mode>(&mut self) -> Option<&mut T>{
+        self.mode_stack.front_mut().unwrap().as_any_mut().downcast_mut::<T>()
+    }
+
+    pub fn enter_mode(&mut self, mode: Box<dyn Mode>) {
+        self.mode_stack.push_front(mode);
+        
+    }
+
+    pub fn pop_mode(&mut self) -> Option<Box<dyn Mode>> {
+        self.mode_stack.pop_front()
+    }
+
+    pub fn exit_mode(&mut self) {
+        self.mode_stack.pop_front();
+    }
+
+    pub fn clear_stack(&mut self) {
+        self.mode_stack.clear();
+        self.enter_mode(Box::new(NormalMode::new()));
+    }
+        
+    pub fn mode_str(&self) -> Option<&'static str> {
+        self.curr_mode().unwrap().mode_str()
+    }
+
+    pub fn mode_id(&self) -> Option<&'static str> {
+        self.curr_mode().unwrap().mode_id()
+    }
+
+
 }
 
 fn initialize_preferences() -> Rc<RefCell<Preferences>> {

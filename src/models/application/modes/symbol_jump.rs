@@ -1,4 +1,7 @@
+use std::any::Any;
+use crate::errors::*;
 use fragment;
+use crate::models::application::Application;
 use fragment::matching::AsStr;
 use scribe::buffer::{Position, Token, TokenSet};
 use syntect::highlighting::ScopeSelectors;
@@ -9,6 +12,8 @@ use std::clone::Clone;
 use std::str::FromStr;
 use std::slice::Iter;
 use crate::models::application::modes::{SearchSelectMode, SearchSelectConfig};
+use crate::models::application::modes::mode::Mode;
+use crate::presenters;
 
 pub struct SymbolJumpMode {
     insert: bool,
@@ -16,6 +21,32 @@ pub struct SymbolJumpMode {
     symbols: Vec<Symbol>,
     results: SelectableVec<Symbol>,
     config: SearchSelectConfig,
+}
+
+impl Mode for SymbolJumpMode {
+    fn mode_str(&self) -> Option<&'static str> {
+            if self.insert_mode() {
+                Some("search_select_insert")
+            } else {
+                Some("search_select")
+            }
+    }
+
+    fn mode_id(&self) -> Option<&'static str> {
+        Some("symbol_jump")
+    }
+
+    fn present(&mut self, app :&mut Application) -> Result<()>{
+        presenters::modes::search_select::display(&mut app.workspace, self, &mut app.view)
+    }
+
+    fn as_any(&self) -> &dyn Any{
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any{
+        self
+    }
 }
 
 #[derive(PartialEq, Debug)]
